@@ -1198,14 +1198,15 @@ class Network:
 
     async def _monitor_new_addresses(self, wallet):
         '''Raises: RPCError, TaskTimeout'''
+        addresses = wallet.get_observed_addresses()
         while True:
-            addresses = await wallet.new_addresses()
             session = await self._main_session()
             session.logger.info(f'subscribing to {len(addresses):,d} new addresses for {wallet}')
             # Do in reverse to require fewer wallet re-sync loops
             pairs = [(address, scripthash_hex(address)) for address in addresses]
             pairs.reverse()
             await session.subscribe_to_pairs(wallet, pairs)
+            addresses = await wallet.new_addresses()
 
     async def _monitor_used_addresses(self, wallet):
         '''Raises: RPCError, TaskTimeout'''
