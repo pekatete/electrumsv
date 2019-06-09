@@ -132,7 +132,7 @@ class TxDialog(QDialog, MessageBoxMixin):
         self.update()
 
         # connect slots so we update in realtime as blocks come in, etc
-        parent.history_updated_signal.connect(self.update_tx_if_in_wallet)
+        parent.history_updated_signal.connect(self._on_history_update_event)
         parent.network_signal.connect(self.got_verified_tx)
 
     def cosigner_send(self):
@@ -152,7 +152,7 @@ class TxDialog(QDialog, MessageBoxMixin):
         if event == 'verified' and args[0] == self.tx.txid():
             self.update()
 
-    def update_tx_if_in_wallet(self):
+    def _on_history_update_event(self, event_name: str):
         tx_hash = self.tx.txid()
         if tx_hash and self.wallet.has_received_transaction(tx_hash):
             self.update()

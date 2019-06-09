@@ -901,7 +901,7 @@ class Abstract_Wallet:
         await self._trigger_synchronization()
 
     # Called by wallet.py:export_history()
-    # Called by history_list.py:on_update()
+    # Called by history_list.py:_create_data_snapshot()
     def get_history(self, domain=None):
         # get domain
         if domain is None:

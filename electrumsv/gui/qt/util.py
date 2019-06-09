@@ -1,7 +1,8 @@
 import os.path
 from functools import partial, lru_cache
+from typing import Any
 
-from PyQt5.QtCore import Qt, QCoreApplication, QTimer
+from PyQt5.QtCore import Qt, QCoreApplication, QTimer, QModelIndex
 from PyQt5.QtGui import QFont, QCursor, QIcon, QColor, QPalette
 from PyQt5.QtWidgets import (
     QPushButton, QLabel, QMessageBox, QHBoxLayout, QDialog, QVBoxLayout, QLineEdit, QGroupBox,
@@ -478,8 +479,9 @@ class MyTreeWidget(QTreeWidget):
         '''Called only when the text actually changes'''
         key = item.data(0, Qt.UserRole)
         text = item.text(column)
-        self.parent.wallet.set_label(key, text)
-        self.parent.history_list.update_labels()
+        # For the old history list.
+        # self.parent.wallet.set_label(key, text)
+        # self.parent.history_list.update_labels()
 
     def update(self):
         # Defer updates if editing
@@ -662,3 +664,8 @@ def read_qt_ui(ui_name):
 @lru_cache()
 def read_QIcon(icon_basename):
     return QIcon(icon_path(icon_basename))
+
+def get_source_index(model_index: QModelIndex, klass: Any):
+    while not isinstance(model_index.model(), klass):
+        model_index = model_index.model().mapToSource(model_index)
+    return model_index

@@ -23,15 +23,17 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from electrumsv.i18n import _
+from typing import Any, List
 
 from PyQt5.QtWidgets import QVBoxLayout, QLabel
 from bitcoinx import Address
 
-from .util import WindowModalDialog, ButtonsLineEdit, ColorScheme, Buttons, CloseButton
-from .history_list import HistoryList
-from .qrtextedit import ShowQRTextEdit
+from electrumsv.i18n import _
+from electrumsv.wallet import Abstract_Wallet
 
+from .util import WindowModalDialog, ButtonsLineEdit, ColorScheme, Buttons, CloseButton
+from .history_list import HistoryView
+from .qrtextedit import ShowQRTextEdit
 
 class AddressDialog(WindowModalDialog):
 
@@ -87,16 +89,12 @@ class AddressDialog(WindowModalDialog):
             vbox.addWidget(redeem_e)
 
         vbox.addWidget(QLabel(_("History")))
-        self.hw = HistoryList(self.parent)
-        self.hw.get_domain = self.get_domain
+        self.hw = AddressHistoryView(self.parent, self.wallet, self)
         vbox.addWidget(self.hw)
 
         vbox.addLayout(Buttons(CloseButton(self)))
         self.format_amount = self.parent.format_amount
-        self.hw.update()
 
-        # connect slots so the embedded history list gets updated whenever the history changes
-        parent.history_updated_signal.connect(self.hw.update)
         parent.network_signal.connect(self.got_verified_tx)
 
     def got_verified_tx(self, event, args):
@@ -115,3 +113,13 @@ class AddressDialog(WindowModalDialog):
             self.parent.show_qrcode(text, 'Address', parent=self)
         except Exception as e:
             self.show_message(str(e))
+
+
+class AddressHistoryView(HistoryView):
+    def __init__(self, parent: Any, wallet: Abstract_Wallet, dialog: AddressDialog) -> None:
+        self._dialog = dialog
+
+        super().__init__(parent, wallet)
+
+    def get_domain(self) -> List[Any]:
+        return self._dialog.get_domain()
