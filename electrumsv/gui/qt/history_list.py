@@ -38,6 +38,7 @@ from electrumsv.app_state import app_state
 from electrumsv.i18n import _
 from electrumsv.logs import logs
 from electrumsv.platform import platform
+from electrumsv.transaction import Transaction
 from electrumsv.util import timestamp_to_datetime, profiler, format_time
 from electrumsv.wallet import Abstract_Wallet
 import electrumsv.web as web
@@ -285,6 +286,7 @@ class HistoryView(BaseView):
         self.customContextMenuRequested.connect(self._event_create_menu)
 
         self._main_window.history_updated_signal.connect(self._on_history_update_event)
+        self._main_window.new_transaction_signal.connect(self._on_new_transaction)
 
         self.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.doubleClicked.connect(self._event_double_clicked)
@@ -303,6 +305,10 @@ class HistoryView(BaseView):
             start_index = model.createIndex(0, FIAT_AMOUNT_COLUMN)
             end_index = model.createIndex(model.columnCount(start_index), FIAT_BALANCE_COLUMN)
             model.dataChanged.emit(start_index, end_index)
+
+    def _on_new_transaction(self, tx: Transaction) -> None:
+        # What do we do here?
+        pass
 
     def _on_history_update_event(self, event_name: str) -> None:
         # logger.debug(f"_on_history_update_event({event_name})/START")
@@ -333,9 +339,11 @@ class HistoryView(BaseView):
 
     def update_line(self, tx_hash: str, height: int, conf: int, timestamp: int) -> None:
         logger.debug(f"update_line({tx_hash})")
-        try:
-            data_index = self._data.index(tx_hash)
-        except ValueError:
+        for i, line in enumerate(self._data):
+            if line.tx_hash == tx_hash:
+                data_index = i
+                break
+        else:
             logger.debug(f"update_line called for non-existent entry {tx_hash}")
             return
 
@@ -409,11 +417,12 @@ class HistoryView(BaseView):
         self.setColumnHidden(FIAT_BALANCE_COLUMN, not flag)
 
     def _event_double_clicked(self, model_index: QModelIndex) -> None:
-        column = model_index.column()
+        base_index = get_source_index(model_index, HistoryItemModel)
+        column = base_index.column()
         if column == DESCRIPTION_COLUMN:
             self.edit(model_index)
         else:
-            line = self._data[model_index.row()]
+            line = self._data[base_index.row()]
             tx = self._wallet.get_transaction(line.tx_hash)
             self._main_window.show_transaction(tx)
 

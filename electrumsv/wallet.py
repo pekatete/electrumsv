@@ -489,6 +489,9 @@ class Abstract_Wallet:
         self.logger.debug("add_verified_tx %d %d %d", height, conf, timestamp)
         self.network.trigger_callback('verified', tx_hash, height, conf, timestamp)
 
+        addresses = [Address.from_string(entry.address_string) for entry in self.get_txins(tx_hash)]
+        self._check_used_addresses(addresses)
+
     def undo_verifications(self, above_height):
         '''Used by the verifier when a reorg has happened'''
         with self.lock:
@@ -642,14 +645,25 @@ class Abstract_Wallet:
         return TxInfo(tx_hash, status, label, can_broadcast, amount, fee,
                       height, conf, timestamp)
 
-    def _get_addr_io(self, address):
+    def _get_addr_io(self, address, cleared: Optional[bool]=False):
         h = self.get_address_history(address)
+
+        tx_ids = set(tx_hash for (tx_hash, _height) in h)
+        if cleared:
+            old_tx_ids = tx_ids
+            flags = TxFlags.StateCleared
+            mask = TxFlags.StateCleared
+            tx_ids = set(tx_id for (tx_id, _entry) in self.db.tx.get_metadatas(flags, mask, tx_ids))
+
         received = {}
-        for tx_hash, height in h:
-            for txout in self.get_txouts(tx_hash, address):
-                received[(tx_hash, txout.out_tx_n)] = (height, txout.amount, txout.is_coinbase)
         sent = {}
         for tx_hash, height in h:
+            if tx_hash not in tx_ids:
+                continue
+
+            for txout in self.get_txouts(tx_hash, address):
+                received[(tx_hash, txout.out_tx_n)] = (height, txout.amount, txout.is_coinbase)
+
             for txin in self.get_txins(tx_hash, address):
                 sent[(txin.prevout_tx_hash, txin.prev_idx)] = height
         return received, sent
@@ -685,9 +699,10 @@ class Abstract_Wallet:
     # return the balance of a bitcoin address: confirmed and matured,
     # unconfirmed, unmatured Note that 'exclude_frozen_coins = True'
     # only checks for coin-level freezing, not address-level.
-    def get_addr_balance(self, address, exclude_frozen_coins = False):
+    def get_addr_balance(self, address: Address, exclude_frozen_coins: Optional[bool]=False,
+            cleared: Optional[bool]=False):
         assert isinstance(address, Address)
-        received, sent = self._get_addr_io(address)
+        received, sent = self._get_addr_io(address, cleared=cleared)
         c = u = x = 0
         for output_key, (tx_height, amount, is_coinbase) in received.items():
             if exclude_frozen_coins and output_key in self._frozen_coins:
@@ -751,7 +766,7 @@ class Abstract_Wallet:
         for addresses in address_list:
             empty_idx = None
             for i, address in enumerate(addresses):
-                if not self.is_used(address):
+                if not self.is_used(address, txs_are_cleared=True):
                     observed.append(address)
 
         return observed
@@ -848,8 +863,6 @@ class Abstract_Wallet:
         if txouts:
             self.db.txout.add_entries(txouts)
 
-        self._check_used_addresses(addresses)
-
     # Used by ImportedWalletBase
     def _remove_transaction(self, tx_hash: str) -> None:
         with self.transaction_lock:
@@ -895,8 +908,6 @@ class Abstract_Wallet:
                 if (tx is not None and not len(self.get_txins(tx_id, addr)) and
                         not len(self.get_txouts(tx_id, addr))):
                     self.apply_transactions_xputs(tx_id, tx)
-
-        self._check_used_addresses([ addr ])
 
         self.txs_changed_event.set()
         await self._trigger_synchronization()
@@ -1138,12 +1149,17 @@ class Abstract_Wallet:
     def can_export(self):
         return not self.is_watching_only() and hasattr(self.keystore, 'get_private_key')
 
-    def is_used(self, address):
-        return len(self.get_address_history(address)) and self.is_empty(address)
+    def is_used(self, address, txs_are_cleared: Optional[bool]=False):
+        return len(self.get_address_history(address)) and self.is_empty(address, txs_are_cleared)
 
-    def is_empty(self, address):
+    def is_empty(self, address, cleared: Optional[bool]=False):
+        """
+        Checks whether the address is empty. Cleared refers to the state of the transactions
+        involved with the address, if it is specified, then only transactions that are
+        mined and verified will be considered when looking.
+        """
         assert isinstance(address, Address)
-        return not any(self.get_addr_balance(address))
+        return not any(self.get_addr_balance(address, cleared=cleared))
 
     def cpfp(self, tx, fee):
         txid = tx.txid()
@@ -1448,8 +1464,10 @@ class Abstract_Wallet:
 
     def _check_used_addresses(self, addresses: Iterable[Address]) -> None:
         assert all(isinstance(address, Address) for address in addresses)
-        addresses = [ a for a in addresses if self.is_used(a) ]
+        addresses = set([ a for a in addresses if self.is_used(a, txs_are_cleared=True) ])
         if addresses:
+            address_strings = [a.to_string() for a in addresses]
+            self.logger.debug("_check_used_addresses: %s", address_strings)
             with self._used_addresses_lock:
                 self._used_addresses.extend(addresses)
             self._used_addresses_event.set()

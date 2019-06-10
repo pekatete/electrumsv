@@ -33,7 +33,7 @@ import os
 import shutil
 import threading
 import time
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional
 import weakref
 import webbrowser
 
@@ -116,7 +116,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
 
     payment_request_ok_signal = pyqtSignal()
     payment_request_error_signal = pyqtSignal()
-    notify_transactions_signal = pyqtSignal()
+    new_transaction_signal = pyqtSignal(object)
     new_fx_quotes_signal = pyqtSignal()
     new_fx_history_signal = pyqtSignal()
     network_signal = pyqtSignal(str, object)
@@ -223,7 +223,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
         self.network_status_signal.connect(self.update_network_status)
         self.payment_request_ok_signal.connect(self.payment_request_ok)
         self.payment_request_error_signal.connect(self.payment_request_error)
-        self.notify_transactions_signal.connect(self.notify_transactions)
+        self.new_transaction_signal.connect(self.notify_transactions)
         self.history_list.setFocus(True)
 
         # network callbacks
@@ -330,8 +330,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
         elif event == 'new_transaction':
             tx, wallet = args
             if wallet == self.wallet: # filter out tx's not for this wallet
-                self.tx_notifications.append(tx)
-                self.notify_transactions_signal.emit()
+                self.new_transaction_signal.emit(tx)
                 self.need_update.set()
         elif event in ['status', 'banner', 'verified', 'fee']:
             # Handle in GUI thread
@@ -362,7 +361,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
         self.need_update.set()
         # Once GUI has been initialized check if we want to announce something since the
         # callback has been called before the GUI was initialized
-        self.notify_transactions()
+        self.notify_transactions(None)
         # update menus
         self.seed_menu.setEnabled(self.wallet.has_seed())
         self.update_buttons_on_seed()
@@ -774,7 +773,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
             self.tx_notify_timer.stop()
             self.tx_notify_timer = None
 
-    def notify_transactions(self):
+    def notify_transactions(self, tx: Optional[Transaction]=None) -> None:
+        if tx is not None:
+            self.tx_notifications.append(tx)
+
         if self.tx_notify_timer or not len(self.tx_notifications) or self.cleaned_up:
             # common case: extant notify timer -- we already enqueued to notify. So bail
             # and wait for timer to handle it.
