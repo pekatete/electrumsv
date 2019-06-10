@@ -279,8 +279,6 @@ class HistoryView(BaseView):
                 self.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
         self.horizontalHeader().setMinimumSectionSize(20)
         self.verticalHeader().setMinimumSectionSize(20)
-        self.verticalHeader().resizeSections()
-        self.horizontalHeader().resizeSections()
 
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._event_create_menu)
