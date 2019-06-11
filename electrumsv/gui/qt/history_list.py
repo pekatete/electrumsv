@@ -27,7 +27,7 @@
 from collections import namedtuple
 from functools import partial
 import time
-from typing import Any, List
+from typing import Any, List, Dict, Union, Optional
 import webbrowser
 
 from PyQt5.QtCore import QAbstractItemModel, QModelIndex, QVariant, Qt, QSortFilterProxyModel
@@ -80,17 +80,15 @@ FIAT_BALANCE_COLUMN = 6
 QT_SORT_ROLE = Qt.UserRole+1
 
 
-class HistoryLine(namedtuple("HistoryLine", "tx_hash, height, conf, timestamp, value, balance, "+
-        "status")):
+class HistoryLine(namedtuple("HistoryLine", "tx_hash, height, timestamp, value, balance")):
     pass
 
 
 LI_HASH = 0
 LI_HEIGHT = 1
-LI_CONF = 2
-LI_TIMESTAMP = 3
-LI_VALUE = 4
-LI_BALANCE = 5
+LI_TIMESTAMP = 2
+LI_VALUE = 3
+LI_BALANCE = 4
 
 
 class HistoryItemModel(QAbstractItemModel):
@@ -127,12 +125,16 @@ class HistoryItemModel(QAbstractItemModel):
 
         if model_index.isValid():
             line = self._data[row]
+            conf = self._view._get_conf(line.timestamp, line.height)
+            status = self._view._get_tx_status(
+                line.tx_hash, line.height, conf, line.timestamp)
+
             # First check the custom sort role.
             if role == QT_SORT_ROLE:
                 # Sort based on raw value.
                 if column == STATUS_COLUMN:
                     if line.timestamp is False:
-                        return 9999999999 - line.status
+                        return 9999999999 - status
                     return line.timestamp
                 elif column == AMOUNT_COLUMN:
                     return line.value
@@ -150,13 +152,13 @@ class HistoryItemModel(QAbstractItemModel):
                     return self._view._wallet.get_label(line.tx_hash)
             elif role == Qt.DecorationRole:
                 if column == ICON_COLUMN:
-                    return read_QIcon(TX_ICONS[line.status])
+                    return read_QIcon(TX_ICONS[status])
                 elif column == AMOUNT_COLUMN:
                     if self._view._wallet.invoices.paid.get(line.tx_hash):
                         return self._invoice_icon
             elif role == Qt.DisplayRole:
                 if column == STATUS_COLUMN:
-                    return self._view._format_tx_status(line.status, line.timestamp)
+                    return self._view._format_tx_status(status, line.timestamp)
                 elif column == DESCRIPTION_COLUMN:
                     return self._view._wallet.get_label(line.tx_hash)
                 elif column == AMOUNT_COLUMN:
@@ -171,11 +173,11 @@ class HistoryItemModel(QAbstractItemModel):
                     if fx and fx.show_history():
                         if column == FIAT_AMOUNT_COLUMN:
                             date = timestamp_to_datetime(time.time()
-                                if line.conf <= 0 else line.timestamp)
+                                if conf <= 0 else line.timestamp)
                             return app_state.fx.historical_value_str(line.value, date)
                         elif column == FIAT_BALANCE_COLUMN:
                             date = timestamp_to_datetime(time.time()
-                                if line.conf <= 0 else line.timestamp)
+                                if conf <= 0 else line.timestamp)
                             return app_state.fx.historical_value_str(line.balance, date)
             elif role == Qt.FontRole:
                 if column != STATUS_COLUMN:
@@ -188,8 +190,8 @@ class HistoryItemModel(QAbstractItemModel):
                 if column == ICON_COLUMN or column >= AMOUNT_COLUMN:
                     return Qt.AlignRight | Qt.AlignVCenter
             elif role == Qt.ToolTipRole:
-                suffix = "s" if line.conf != 1 else ""
-                return f"{line.conf} confirmation{suffix}"
+                suffix = "s" if conf != 1 else ""
+                return f"{conf} confirmation{suffix}"
 
     def flags(self, model_index: QModelIndex) -> int:
         if model_index.isValid():
@@ -233,30 +235,43 @@ class HistorySortFilterProxyModel(QSortFilterProxyModel):
         return value_left < value_right
 
 
-class BaseView(QTableView):
-    def __init__(self, parent: Any) -> None:
-        super().__init__(parent)
-
-        self.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
-        self.setSelectionBehavior(QAbstractItemView.SelectItems)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
-
-        self.verticalHeader().setVisible(False)
-
-
-class HistoryView(BaseView):
-    def __init__(self, parent: Any, wallet: Abstract_Wallet) -> None:
+class HistoryView(QTableView):
+    """
+    Events and updating the view:
+    - Blockchain events.
+      - Chain event.
+        - On a reorg:
+          - ...
+        - On a new block added to the chain:
+          - ...
+      - Missing transaction.
+        - The wallet requested a missing transaction and it has arrived.
+    - User events.
+      - The user just edited a label.
+      - Updated labels arrived from the label sync source.
+      - TODO
+    """
+    def __init__(self, parent: Any, wallet: Abstract_Wallet,
+            wait_for_load_event: Optional[bool]=False) -> None:
         super().__init__(parent)
 
         self._main_window = parent
         self._wallet = wallet
 
+        # The data should be known, it shouldn't change underneath the view unless the view is
+        # changing it. Otherwise the pinned view data will conflict with the non-pinned view
+        # data.
         self._headers = COLUMN_NAMES
 
+        self.verticalHeader().setVisible(False)
         self.setAlternatingRowColors(True)
         self.sortByColumn(STATUS_COLUMN, Qt.DescendingOrder)
 
-        self._data = self._create_data_snapshot()
+        if wait_for_load_event:
+            self.setEnabled(False)
+            self._data = []
+        else:
+            self._data = self._create_data_snapshot()
         model = HistoryItemModel(self, self._headers, self._data)
         # NOTE: rt12 -- The raw sort model does not appear to be using the sort role.
         # proxy_model = QSortFilterProxyModel()
@@ -280,11 +295,17 @@ class HistoryView(BaseView):
         self.horizontalHeader().setMinimumSectionSize(20)
         self.verticalHeader().setMinimumSectionSize(20)
 
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
+        self.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._event_create_menu)
 
         self._main_window.history_updated_signal.connect(self._on_history_update_event)
+        self._main_window.network_chain_signal.connect(self._on_network_chain_event)
         self._main_window.new_transaction_signal.connect(self._on_new_transaction)
+        app_state.app.labels_changed_signal.connect(self._on_labels_changed)
 
         self.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.doubleClicked.connect(self._event_double_clicked)
@@ -301,21 +322,86 @@ class HistoryView(BaseView):
         if flag:
             model = self.model()
             start_index = model.createIndex(0, FIAT_AMOUNT_COLUMN)
-            end_index = model.createIndex(model.columnCount(start_index), FIAT_BALANCE_COLUMN)
+            end_index = model.createIndex(model.columnCount(start_index)-1, FIAT_BALANCE_COLUMN)
             model.dataChanged.emit(start_index, end_index)
 
-    def _on_new_transaction(self, tx: Transaction) -> None:
-        # What do we do here?
-        pass
+    @profiler
+    def _on_network_chain_event(self, old_chain, new_chain) -> None:
+        logger.debug("_on_network_chain_event %s -> %s", old_chain, new_chain)
+        if not old_chain:
+            # At this time we ignore this event. It has not been observed to happen.
+            return
 
+        self._display_height = self._wallet.get_local_height()
+
+        if old_chain is new_chain:
+            # We detected a new block being mined.
+            start_row = -1
+            for i in range(len(self._data)-1, -1, -1):
+                line = self._data[i]
+                # NOTE: This is naive and assumes correct ordering of the underlying model data.
+                # It should work, but we may want to get more specific in the case it doesn't.
+                if self._display_height - line.height > 6:
+                    break
+                start_row = i
+            logger.debug("_on_network_chain_event.start_row=%s", start_row)
+
+            if start_row != -1:
+                # For all the rows that are visually not completely confirmed (6+ confirmations).
+                # Update the pending transaction statuses.
+                # Update all the icons.
+                model = self.model().sourceModel()
+                start_index = model.createIndex(start_row, ICON_COLUMN)
+                end_index = model.createIndex(model.rowCount(start_index)-1, STATUS_COLUMN)
+                model.dataChanged.emit(start_index, end_index)
+        else:
+            # We detected a reorg. In theory we can do better and target the affected rows, but
+            # this should be rare enough that the work can be deferred.
+            self.update_all()
+
+    @profiler
+    def _on_new_transaction(self, tx: Transaction) -> None:
+        tx_hash = tx.txid()
+        logger.debug("_on_new_transaction %s", tx_hash)
+
+        # If we do find it, it's going to be more recent.
+        for line in reversed(self._data):
+            if line.tx_hash == tx_hash:
+                logger.debug("_on_new_transaction/skipped")
+                return
+
+        height, conf, timestamp = self._wallet.get_tx_height(tx_hash)
+        status = self._get_tx_status(tx_hash, height, conf, timestamp)
+        is_relevant, is_mine, value, fee = self._wallet.get_wallet_delta(tx)
+        if len(self._data):
+            balance = self._data[-1].balance + value
+        else:
+            balance = value
+
+        line = HistoryLine(tx_hash, height, timestamp, value, balance)
+        model = self.model().sourceModel()
+        model.beginInsertRows(QModelIndex(), 0, 0)
+        self._data.append(line)
+        model.endInsertRows()
+
+    @profiler
     def _on_history_update_event(self, event_name: str) -> None:
-        # logger.debug(f"_on_history_update_event({event_name})/START")
+        logger.debug("_on_history_update_event %s", event_name)
+        if not self.isEnabled():
+            if event_name == "activate":
+                self.setEnabled(True)
+                self.update_all()
+            else:
+                logger.debug("_on_history_update_event unhandled event while loading wallet %s",
+                    event_name)
+            return
+
         if event_name == "fiat_ccy_changed":
             self.update_fx_history()
         elif event_name == "num_zeros_changed" or event_name == "base_unit_changed":
             model = self.model().sourceModel()
             start_index = model.createIndex(0, AMOUNT_COLUMN)
-            end_index = model.createIndex(model.rowCount(start_index), BALANCE_COLUMN)
+            end_index = model.createIndex(model.rowCount(start_index)-1, BALANCE_COLUMN)
             model.dataChanged.emit(start_index, end_index)
         elif event_name == "delete_invoice":
             self.update_all()
@@ -327,16 +413,31 @@ class HistoryView(BaseView):
         elif event_name == "import_privkey":
             self.update_all()
         elif event_name == "update_tabs":
-            self.update_all()
-        # logger.debug(f"_on_history_update_event({event_name})/END")
+            pass # self.update_all()
+        elif event_name in [ "load_wallet" ]:
+            # We have no use for this event at this time.
+            pass
+        else:
+            logger.debug("_on_history_update_event unhandled event %s", event_name)
+
+    def _on_labels_changed(self, wallet: Abstract_Wallet, updates: Any) -> None:
+        logger.debug("_on_labels_changed for %d labels", len(updates))
+        for tx_hash, label_text in updates.items():
+            self._update_line(tx_hash, {})
 
     def update_transaction(self, tx_hash: str) -> None:
-        logger.debug(f"update_transaction({tx_hash})")
+        logger.debug("update_transaction %s", tx_hash)
         height, conf, timestamp = self._wallet.get_tx_height(tx_hash)
         self.update_line(tx_hash, height, conf, timestamp)
 
     def update_line(self, tx_hash: str, height: int, conf: int, timestamp: int) -> None:
-        logger.debug(f"update_line({tx_hash})")
+        logger.debug("update_line %s", tx_hash)
+        values = {}
+        values[LI_HEIGHT] = height
+        values[LI_TIMESTAMP] = timestamp
+        self._update_line(tx_hash, values)
+
+    def _update_line(self, tx_hash: str, values: Dict[int, Any]) -> None:
         for i, line in enumerate(self._data):
             if line.tx_hash == tx_hash:
                 data_index = i
@@ -346,15 +447,17 @@ class HistoryView(BaseView):
             return
 
         line = self._data[data_index]
-        logger.debug(f"update_line({data_index})")
+        logger.debug(f"_update_line tx={tx_hash} idx={data_index}")
 
-        l = list(line)
-        l[LI_HEIGHT] = height
-        l[LI_CONF] = conf
-        l[LI_TIMESTAMP] = timestamp
-        self._data[data_index] = HistoryLine(*l)
+        if len(values):
+            l = list(line)
+            for value_index, value in values.items():
+                l[value_index] = value
+            self._data[data_index] = HistoryLine(*l)
 
         model = self.model().sourceModel()
+        # TODO: We update the whole row. Strictly speaking if we could map line indices to column
+        # indices, we could just update a subsection.
         start_index = model.createIndex(data_index, 0)
         column_count = model.columnCount(start_index)
         end_index = model.createIndex(data_index, column_count-1)
@@ -362,6 +465,8 @@ class HistoryView(BaseView):
 
     @profiler
     def update_all(self) -> None:
+        logger.debug("update_all")
+
         # The key reason this is used, is because the balance is dependent on the consecutive
         # transactions, so we may as well regenerate the entire data.
         model = self.model().sourceModel()
@@ -381,8 +486,6 @@ class HistoryView(BaseView):
         #     max(old_column_count, new_column_count)-1)
         # model.dataChanged.emit(start_index, end_index)
 
-        logger.debug(f"update_all()")
-
     def on_base_unit_changed(self) -> None:
         model = self.model().sourceModel()
         start_index = model.createIndex(0, 0)
@@ -395,12 +498,13 @@ class HistoryView(BaseView):
         return self._wallet.get_addresses()
 
     def _create_data_snapshot(self) -> None:
+        self._display_height = self._wallet.get_local_height()
+        logger.debug("_create_data_snapshot %d", self._display_height)
+
         lines = []
         source_lines = self._wallet.get_history(self.get_domain())
         for tx_hash, height, conf, timestamp, value, balance in source_lines:
-            status = self._get_tx_status(tx_hash, height, conf, timestamp)
-            line = HistoryLine(tx_hash, height, conf, timestamp, value, balance, status)
-            lines.append(line)
+            lines.append(HistoryLine(tx_hash, height, timestamp, value, balance))
         return lines
 
     def _set_fiat_columns_enabled(self, flag: bool) -> None:
@@ -480,7 +584,7 @@ class HistoryView(BaseView):
 
     def _get_tx_status(self, tx_hash, height, conf, timestamp):
         if conf == 0:
-            tx = self._wallet.get_transaction(tx_hash)
+            tx = self._wallet.has_received_transaction(tx_hash)
             if not tx:
                 return 3
             if height < 0:
@@ -495,7 +599,11 @@ class HistoryView(BaseView):
 
     def _format_tx_status(self, status: int, timestamp: int) -> str:
         if status < len(TX_STATUS):
-            status_str = TX_STATUS[status]
-        else:
-            status_str = format_time(timestamp, _("unknown")) if timestamp else _("unknown")
-        return status_str
+            return TX_STATUS[status]
+        return format_time(timestamp, _("Unknown")) if timestamp else _("Unknown")
+
+    def _get_conf(self, timestamp: Union[bool, int], height: int) -> int:
+        if timestamp:
+            return max(self._display_height - height + 1, 0)
+        return 0
+

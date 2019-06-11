@@ -64,7 +64,7 @@ class CoinSplittingTab(QWidget):
         self.split_stage = STAGE_PREPARING
         self.new_transaction_cv = threading.Condition()
 
-        window.network.register_callback(self._on_network_event, ['new_transaction'])
+        window.network.register_callback(self._on_network_event, ['missing_transaction_added'])
         self.waiting_dialog = SplitWaitingDialog(window, self, self._split_prepare_task,
                                                  on_done=self._on_split_prepare_done)
 
@@ -202,7 +202,7 @@ class CoinSplittingTab(QWidget):
 
     def _on_network_event(self, event, *args):
         window = self.window()
-        if event == 'new_transaction':
+        if event == 'missing_transaction_added':
             tx, wallet = args
             if wallet == window.wallet: # filter out tx's not for this wallet
                 our_script = self.receiving_address.to_script_bytes()

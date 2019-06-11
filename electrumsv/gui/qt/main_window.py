@@ -68,7 +68,7 @@ from electrumsv.util import (
     get_update_check_dates, get_identified_release_signers, profiler
 )
 from electrumsv.version import PACKAGE_VERSION
-from electrumsv.wallet import Multisig_Wallet, sweep_preparations
+from electrumsv.wallet import Multisig_Wallet, sweep_preparations, Abstract_Wallet
 import electrumsv.web as web
 
 from .amountedit import AmountEdit, BTCAmountEdit, MyLineEdit
@@ -120,12 +120,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
     new_fx_quotes_signal = pyqtSignal()
     new_fx_history_signal = pyqtSignal()
     network_signal = pyqtSignal(str, object)
+    network_chain_signal = pyqtSignal(object, object)
     computing_privkeys_signal = pyqtSignal()
     show_privkeys_signal = pyqtSignal()
     history_updated_signal = pyqtSignal(object)
     network_status_signal = pyqtSignal(object)
 
-    def __init__(self, wallet):
+    def __init__(self, wallet: Abstract_Wallet) -> None:
         QMainWindow.__init__(self)
 
         self._api = WalletAPI(self)
@@ -229,19 +230,23 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
         # network callbacks
         if self.network:
             self.network_signal.connect(self.on_network_qt)
-            interests = ['updated', 'new_transaction', 'status',
-                         'banner', 'verified', 'fee']
+            interests = ['missing_transaction_added', 'new_addresses_added', 'main_chain',
+                         'status', 'banner', 'verified', 'fee', 'synchronized']
             # To avoid leaking references to "self" that prevent the
             # window from being GC-ed when closed, callbacks should be
             # methods of this class only, and specifically not be
             # partials, lambdas or methods of subobjects.  Hence...
-            self.network.register_callback(self.on_network, interests)
+            self.network.register_callback(self._on_network, interests)
             # set initial message
             self.console.showMessage(self.network.main_server.state.banner)
             self.network.register_callback(self.on_quotes, ['on_quotes'])
             self.network.register_callback(self.on_history, ['on_history'])
             self.new_fx_quotes_signal.connect(self.on_fx_quotes)
             self.new_fx_history_signal.connect(self.on_fx_history)
+
+            # Until the history list is fully connected to it's events we need to defer loading
+            # it, so as to avoid missed events. In this case the chain catching up to tip.
+            self.history_updated_signal.emit('activate')
 
         self.load_wallet()
         self.app.timer.timeout.connect(self.timer_actions)
@@ -323,11 +328,14 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
     def on_error(self, exc_info):
         self.on_exception(exc_info[1])
 
-    def on_network(self, event, *args):
-        if event == 'updated':
+    def _on_network(self, event, *args):
+        self.logger.debug("_on_network '%s'", event)
+        if event == 'main_chain':
+            self.network_chain_signal.emit(*args)
             self.need_update.set()
-
-        elif event == 'new_transaction':
+        elif event == 'new_addresses_added' or event == 'synchronized':
+            self.need_update.set()
+        elif event == 'missing_transaction_added':
             tx, wallet = args
             if wallet == self.wallet: # filter out tx's not for this wallet
                 self.new_transaction_signal.emit(tx)
@@ -942,7 +950,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
         if self.wallet.is_synchronized() or not self.network or not self.network.is_connected():
             self.update_tabs()
 
-    def update_tabs(self):
+    def update_tabs(self, *args):
         self.request_list.update()
         self.address_list.update()
         self.utxo_list.update()
@@ -952,7 +960,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
 
     def create_history_tab(self):
         from .history_list import HistoryView
-        self.history_list = l = HistoryView(self, self.wallet)
+        self.history_list = l = HistoryView(self, self.wallet, wait_for_load_event=True)
         l.searchable_list = l
         return l
 
@@ -2841,7 +2849,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin):
 
     def clean_up(self):
         if self.network:
-            self.network.unregister_callback(self.on_network)
+            self.network.unregister_callback(self._on_network)
 
         if self.tx_notify_timer:
             self.tx_notify_timer.stop()

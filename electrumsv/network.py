@@ -1044,9 +1044,8 @@ class Network:
                 logger.info(f'main chain updated; undoing wallet verifications '
                             f'above height {above_height:,d}')
                 self.wallet_jobs.put(('undo_verifications', above_height))
-            main_chain = new_main_chain
-            self.trigger_callback('updated')
             self.trigger_callback('main_chain', main_chain, new_main_chain)
+            main_chain = new_main_chain
 
     async def _set_main_server(self, server, reason):
         '''Set the main server to something new.'''
@@ -1125,7 +1124,7 @@ class Network:
                     logger.error(f'fetching transaction {tx_hash}: {e}')
                 else:
                     wallet.add_transaction(tx_hash, tx)
-                    self.trigger_callback('new_transaction', tx, wallet)
+                    self.trigger_callback('missing_transaction_added', tx, wallet)
         return had_timeout
 
     def _available_servers(self, protocol):
@@ -1210,18 +1209,18 @@ class Network:
             await session.subscribe_to_pairs(wallet, pairs)
             addresses = await wallet.new_addresses()
 
-    async def _monitor_used_addresses(self, wallet):
+    async def _monitor_stale_addresses(self, wallet):
         '''Raises: RPCError, TaskTimeout'''
         while True:
-            addresses = await wallet.used_addresses()
+            addresses = await wallet.stale_addresses()
             session = await self._main_session()
             if len(addresses) < 5:
                 address_strings = [a.to_string() for a in addresses]
                 session.logger.info(
-                    f'unsubscribing from used addresses for {wallet}: {address_strings}')
+                    f'unsubscribing from stale addresses for {wallet}: {address_strings}')
             else:
                 session.logger.info(f'unsubscribing from {len(addresses):,d} '+
-                    f'used addresses for {wallet}')
+                    f'stale addresses for {wallet}')
             pairs = [(address, scripthash_hex(address)) for address in addresses]
             await session.unsubscribe_from_pairs(wallet, pairs)
 
@@ -1234,7 +1233,7 @@ class Network:
                     async with TaskGroup() as group:
                         await group.spawn(self._monitor_txs, wallet)
                         await group.spawn(self._monitor_new_addresses, wallet)
-                        await group.spawn(self._monitor_used_addresses, wallet)
+                        await group.spawn(self._monitor_stale_addresses, wallet)
                         await group.spawn(wallet.synchronize_loop)
                 except (RPCError, BatchError, DisconnectSessionError, TaskTimeout) as error:
                     blacklist = isinstance(error, DisconnectSessionError) and error.blacklist

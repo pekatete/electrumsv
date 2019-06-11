@@ -161,15 +161,18 @@ class LabelSync(object):
                 continue
             result[key] = value
 
+        updates = {}
         for key, value in result.items():
             if force or not wallet.labels.get(key):
-                wallet.labels[key] = value
+                updates[key] = value
+        if len(updates):
+            wallet.labels.update(updates)
 
         logger.info(f"received {len(response):,d} labels")
         # do not write to disk because we're in a daemon thread
         wallet.storage.put('labels', wallet.labels)
         self.set_nonce(wallet, response["nonce"] + 1)
-        self.on_pulled(wallet)
+        self.on_pulled(wallet, updates)
 
     def pull_thread_safe(self, wallet, force):
         try:
@@ -238,8 +241,8 @@ class LabelSync(object):
         vbox.addLayout(Buttons(OkButton(d)))
         return bool(d.exec_())
 
-    def on_pulled(self, wallet):
-        app_state.app.labels_changed_signal.emit(wallet)
+    def on_pulled(self, wallet, updates):
+        app_state.app.labels_changed_signal.emit(wallet, updates)
 
     def on_exception(self, dialog, exception):
         if not isinstance(exception, UserCancelled):

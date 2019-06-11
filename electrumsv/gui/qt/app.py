@@ -75,7 +75,7 @@ class SVApplication(QApplication):
     # Signals need to be on a QObject
     create_new_window_signal = pyqtSignal(str, object)
     cosigner_received_signal = pyqtSignal(object, object)
-    labels_changed_signal = pyqtSignal(object)
+    labels_changed_signal = pyqtSignal(object, object)
     window_opened_signal = pyqtSignal(object)
     window_closed_signal = pyqtSignal(object)
     # Async tasks
