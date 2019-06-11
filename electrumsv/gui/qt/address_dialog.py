@@ -99,7 +99,7 @@ class AddressDialog(WindowModalDialog):
 
     def got_verified_tx(self, event, args):
         if event == 'verified':
-            self.hw.update_item(*args)
+            self.hw.update_line(*args)
 
     def update_addr(self):
         self.addr_e.setText(self.address.to_string())
