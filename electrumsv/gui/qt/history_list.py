@@ -80,7 +80,7 @@ FIAT_BALANCE_COLUMN = 6
 QT_SORT_ROLE = Qt.UserRole+1
 
 
-class HistoryLine(namedtuple("HistoryLine", "tx_hash, height, timestamp, value, balance")):
+class HistoryLine(namedtuple("HistoryLine", "tx_hash, height, timestamp, value, position")):
     pass
 
 
@@ -88,16 +88,16 @@ LI_HASH = 0
 LI_HEIGHT = 1
 LI_TIMESTAMP = 2
 LI_VALUE = 3
-LI_BALANCE = 4
+LI_POSITION = 4
 
 
 class HistoryItemModel(QAbstractItemModel):
-    def __init__(self, parent: Any, column_names: List[str], data: List[HistoryLine]) -> None:
+    def __init__(self, parent: Any, column_names: List[str]) -> None:
         super().__init__(parent)
 
         self._view = parent
-        self._data = data
         self._column_names = column_names
+        self._balances = None
 
         self._monospace_font = QFont(platform.monospace_font)
         self._withdrawal_brush = QBrush(QColor("#BC1E1E"))
@@ -109,8 +109,145 @@ class HistoryItemModel(QAbstractItemModel):
     def set_column_name(self, column_index: int, column_name: str) -> None:
         self._column_names[column_index] = column_name
 
-    def set_data(self, data: List[Any]) -> None:
+    def set_data(self, height: int, balance: int, data: List[HistoryLine]) -> None:
+        self._height = height
+        self._balance = balance
         self._data = data
+        self._reset_balances()
+        self._calculate_balances()
+
+    # def set_balance(self, balance: int) -> None:
+    #     self._balance = balance
+
+    def set_height(self, height: int) -> None:
+        self._height = height
+
+    def _reset_balances(self) -> None:
+        self._balances = [0] * len(self._data)
+
+    def _calculate_balances(self, from_row: int=0) -> None:
+        if not len(self._data):
+            return
+
+        # Recalculate balances as needed.
+        if from_row == 0:
+            balance = 0
+            for i, line in enumerate(self._data):
+                balance += line.value
+                self._balances[i] = balance
+        else:
+            balance = self._balances[from_row-1]
+            for i in range(from_row, len(self._data)):
+                balance += self._data[i].value
+                self._balances[i] = balance
+
+        if sum(line.value for line in self._data) != self._balances[-1]:
+            raise Exception("Invalid balance detected", from_row)
+
+    # def _get_row_balance(self, row: int) -> int:
+    #     line = self._data[row]
+    #     conf = self._view._get_conf(line.timestamp, line.height)
+
+    def _get_sort_key(self, line: HistoryLine) -> int:
+        # ...
+        if line.timestamp:
+            return line.height, line.position
+        elif line.height:
+            return (line.height, 0) if line.height > 0 else ((1e9 - line.height), 0)
+        else:
+            return (1e9+1, 0)
+
+    def _get_row(self, tx_hash: str) -> Optional[int]:
+        # Get the offset of the line with the given transaction hash.
+        for i, line in enumerate(self._data):
+            if line.tx_hash == tx_hash:
+                return i
+        return None
+
+    def _get_match_row(self, line: HistoryLine) -> int:
+        # Get the existing line that precedes where the given line would go.
+        new_key = self._get_sort_key(line)
+        for i in range(len(self._data)-1, -1, -1):
+            key = self._get_sort_key(self._data[i])
+            if new_key >= key:
+                return i
+        return -1
+
+    def _add_line(self, line: HistoryLine) -> int:
+        match_row = self._get_match_row(line)
+        insert_row = match_row + 1
+
+        # Signal the insertion of the new row.
+        self.beginInsertRows(QModelIndex(), insert_row, insert_row)
+        # self._balance += line.value
+        row_count = self.rowCount(QModelIndex())
+        if insert_row == row_count:
+            self._data.append(line)
+            balance = self._balances[-1] if len(self._balances) else 0
+            self._balances.append(balance)
+        else:
+            # Insert the data entries.
+            self._data.insert(insert_row, line)
+            self._balances.insert(insert_row, 0)
+        self.endInsertRows()
+
+        return insert_row
+
+    def _remove_line(self, row: int) -> HistoryLine:
+        line = self._data[row]
+
+        self.beginRemoveRows(QModelIndex(), row, row)
+        del self._data[row]
+        del self._balances[row]
+        self.endRemoveRows()
+
+        return line
+
+    def add_line(self, line: HistoryLine) -> None:
+        insert_row = self._add_line(line)
+
+        self._calculate_balances(insert_row)
+
+        # Signal the update of the affected balances.
+        start_index = self.createIndex(insert_row, BALANCE_COLUMN)
+        row_count = self.rowCount(start_index)
+        end_index = self.createIndex(row_count-1, BALANCE_COLUMN)
+        self.dataChanged.emit(start_index, end_index)
+
+    def update_line(self, tx_hash: str, values: Dict[int, Any]) -> bool:
+        row = self._get_row(tx_hash)
+        if row is None:
+            logger.debug(f"update_line called for non-existent entry {tx_hash}")
+            return False
+
+        logger.debug(f"update_line tx={tx_hash} idx={row}")
+
+        old_line = self._data[row]
+        new_line = None
+        if len(values):
+            l = list(old_line)
+            for value_index, value in values.items():
+                l[value_index] = value
+            new_line = self._data[row] = HistoryLine(*l)
+
+            old_key = self._get_sort_key(old_line)
+            new_key = self._get_sort_key(new_line)
+
+            if old_key != new_key:
+                # We need to move the line, so it is more than a simple row update.
+                self._remove_line(row)
+                insert_row = self._add_line(new_line)
+                self._calculate_balances(min(insert_row, row))
+                return True
+
+        start_index = self.createIndex(row, 0)
+        column_count = self.columnCount(start_index)
+        end_index = self.createIndex(row, column_count-1)
+        self.dataChanged.emit(start_index, end_index)
+
+        return True
+
+    # Overridden methods:
 
     def columnCount(self, model_index: QModelIndex) -> int:
         return len(self._column_names)
@@ -128,22 +265,21 @@ class HistoryItemModel(QAbstractItemModel):
             conf = self._view._get_conf(line.timestamp, line.height)
             status = self._view._get_tx_status(
                 line.tx_hash, line.height, conf, line.timestamp)
+            balance = self._balances[row]
 
             # First check the custom sort role.
             if role == QT_SORT_ROLE:
                 # Sort based on raw value.
                 if column == STATUS_COLUMN:
-                    if line.timestamp is False:
-                        return 9999999999 - status
-                    return line.timestamp
+                    return self._get_sort_key(line)
                 elif column == AMOUNT_COLUMN:
                     return line.value
                 elif column == BALANCE_COLUMN:
-                    return line.balance
+                    return balance
                 elif column == FIAT_AMOUNT_COLUMN:
                     return line.value
                 elif column == FIAT_BALANCE_COLUMN:
-                    return line.balance
+                    return balance
 
                 # Just use the displayed text.
                 role = Qt.DisplayRole
@@ -165,8 +301,7 @@ class HistoryItemModel(QAbstractItemModel):
                     return self._view._main_window.format_amount(line.value,
                         True, whitespaces=True)
                 elif column == BALANCE_COLUMN:
-                    return self._view._main_window.format_amount(line.balance,
-                        whitespaces=True)
+                    return self._view._main_window.format_amount(balance, whitespaces=True)
                 elif column >= FIAT_AMOUNT_COLUMN:
                     fx = app_state.fx
                     fx_enabled = fx and fx.show_history()
@@ -178,7 +313,7 @@ class HistoryItemModel(QAbstractItemModel):
                         elif column == FIAT_BALANCE_COLUMN:
                             date = timestamp_to_datetime(time.time()
                                 if conf <= 0 else line.timestamp)
-                            return app_state.fx.historical_value_str(line.balance, date)
+                            return app_state.fx.historical_value_str(balance, date)
             elif role == Qt.FontRole:
                 if column != STATUS_COLUMN:
                     return self._monospace_font
@@ -241,15 +376,12 @@ class HistoryView(QTableView):
     - Blockchain events.
       - Chain event.
         - On a reorg:
-          - ...
         - On a new block added to the chain:
-          - ...
       - Missing transaction.
         - The wallet requested a missing transaction and it has arrived.
     - User events.
       - The user just edited a label.
       - Updated labels arrived from the label sync source.
-      - TODO
     """
     def __init__(self, parent: Any, wallet: Abstract_Wallet,
             wait_for_load_event: Optional[bool]=False) -> None:
@@ -270,9 +402,12 @@ class HistoryView(QTableView):
         if wait_for_load_event:
             self.setEnabled(False)
             self._data = []
+            self._display_height = 0
+            self._balance = 0
         else:
             self._data = self._create_data_snapshot()
-        model = HistoryItemModel(self, self._headers, self._data)
+        model = HistoryItemModel(self, self._headers)
+        model.set_data(self._display_height, self._balance, self._data)
         # NOTE: rt12 -- The raw sort model does not appear to be using the sort role.
         # proxy_model = QSortFilterProxyModel()
         # NOTE: rt12 -- This custom sort model implements explcit sort role usage.
@@ -333,6 +468,8 @@ class HistoryView(QTableView):
             return
 
         self._display_height = self._wallet.get_local_height()
+        model = self.model().sourceModel()
+        model.set_height(self._display_height)
 
         if old_chain is new_chain:
             # We detected a new block being mined.
@@ -350,7 +487,6 @@ class HistoryView(QTableView):
                 # For all the rows that are visually not completely confirmed (6+ confirmations).
                 # Update the pending transaction statuses.
                 # Update all the icons.
-                model = self.model().sourceModel()
                 start_index = model.createIndex(start_row, ICON_COLUMN)
                 end_index = model.createIndex(model.rowCount(start_index)-1, STATUS_COLUMN)
                 model.dataChanged.emit(start_index, end_index)
@@ -373,16 +509,10 @@ class HistoryView(QTableView):
         height, conf, timestamp = self._wallet.get_tx_height(tx_hash)
         status = self._get_tx_status(tx_hash, height, conf, timestamp)
         is_relevant, is_mine, value, fee = self._wallet.get_wallet_delta(tx)
-        if len(self._data):
-            balance = self._data[-1].balance + value
-        else:
-            balance = value
+        line = HistoryLine(tx_hash, height, timestamp, value, 0)
 
-        line = HistoryLine(tx_hash, height, timestamp, value, balance)
         model = self.model().sourceModel()
-        model.beginInsertRows(QModelIndex(), 0, 0)
-        self._data.append(line)
-        model.endInsertRows()
+        model.add_line(line)
 
     @profiler
     def _on_history_update_event(self, event_name: str) -> None:
@@ -422,46 +552,26 @@ class HistoryView(QTableView):
 
     def _on_labels_changed(self, wallet: Abstract_Wallet, updates: Any) -> None:
         logger.debug("_on_labels_changed for %d labels", len(updates))
+
+        model = self.model().sourceModel()
         for tx_hash, label_text in updates.items():
-            self._update_line(tx_hash, {})
+            model.update_line(tx_hash, {})
 
     def update_transaction(self, tx_hash: str) -> None:
         logger.debug("update_transaction %s", tx_hash)
         height, conf, timestamp = self._wallet.get_tx_height(tx_hash)
-        self.update_line(tx_hash, height, conf, timestamp)
+
+        model = self.model().sourceModel()
+        model.update_line(tx_hash, height, conf, timestamp)
 
     def update_line(self, tx_hash: str, height: int, conf: int, timestamp: int) -> None:
         logger.debug("update_line %s", tx_hash)
         values = {}
         values[LI_HEIGHT] = height
         values[LI_TIMESTAMP] = timestamp
-        self._update_line(tx_hash, values)
-
-    def _update_line(self, tx_hash: str, values: Dict[int, Any]) -> None:
-        for i, line in enumerate(self._data):
-            if line.tx_hash == tx_hash:
-                data_index = i
-                break
-        else:
-            logger.debug(f"update_line called for non-existent entry {tx_hash}")
-            return
-
-        line = self._data[data_index]
-        logger.debug(f"_update_line tx={tx_hash} idx={data_index}")
-
-        if len(values):
-            l = list(line)
-            for value_index, value in values.items():
-                l[value_index] = value
-            self._data[data_index] = HistoryLine(*l)
 
         model = self.model().sourceModel()
-        # TODO: We update the whole row. Strictly speaking if we could map line indices to column
-        # indices, we could just update a subsection.
-        start_index = model.createIndex(data_index, 0)
-        column_count = model.columnCount(start_index)
-        end_index = model.createIndex(data_index, column_count-1)
-        model.dataChanged.emit(start_index, end_index)
+        model.update_line(tx_hash, values)
 
     @profiler
     def update_all(self) -> None:
@@ -472,19 +582,8 @@ class HistoryView(QTableView):
         model = self.model().sourceModel()
         model.beginResetModel()
         self._data = self._create_data_snapshot()
-        model.set_data(self._data)
+        model.set_data(self._display_height, self._balance, self._data)
         model.endResetModel()
-
-        # model = self.model().sourceModel()
-        # start_index = model.createIndex(0, 0)
-        # old_column_count = model.columnCount(start_index)
-        # old_row_count = model.rowCount(start_index)
-        # model.set_data(self._data)
-        # new_column_count = model.columnCount(start_index)
-        # new_row_count = model.rowCount(start_index)
-        # end_index = model.createIndex(max(old_row_count, new_row_count)-1,
-        #     max(old_column_count, new_column_count)-1)
-        # model.dataChanged.emit(start_index, end_index)
 
     def on_base_unit_changed(self) -> None:
         model = self.model().sourceModel()
@@ -498,13 +597,14 @@ class HistoryView(QTableView):
         return self._wallet.get_addresses()
 
     def _create_data_snapshot(self) -> None:
+        self._balance = sum(self._wallet.get_balance(self.get_domain()))
         self._display_height = self._wallet.get_local_height()
         logger.debug("_create_data_snapshot %d", self._display_height)
 
         lines = []
         source_lines = self._wallet.get_history(self.get_domain())
         for tx_hash, height, conf, timestamp, value, balance in source_lines:
-            lines.append(HistoryLine(tx_hash, height, timestamp, value, balance))
+            lines.append(HistoryLine(tx_hash, height, timestamp, value, 0))
         return lines
 
     def _set_fiat_columns_enabled(self, flag: bool) -> None:
