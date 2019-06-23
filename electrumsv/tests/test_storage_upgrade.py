@@ -3,7 +3,8 @@ import shutil
 import tempfile
 
 from electrumsv.storage import WalletStorage
-from electrumsv.wallet import Wallet
+from electrumsv.wallet import ParentWallet
+from electrumsv.wallet_database import BaseWalletStore
 
 from electrumsv.tests.test_wallet import WalletTestCase
 
@@ -271,7 +272,7 @@ class TestStorageUpgrade(WalletTestCase):
 ##########
 
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         super().setUpClass()
         from electrumsv.simple_config import SimpleConfig
 
@@ -279,7 +280,7 @@ class TestStorageUpgrade(WalletTestCase):
         config = SimpleConfig({'electrum_sv_path': cls.electrum_sv_path})
 
     @classmethod
-    def tearDownClass(cls):
+    def tearDownClass(cls) -> None:
         super().tearDownClass()
         shutil.rmtree(cls.electrum_sv_path)
 
@@ -303,13 +304,17 @@ class TestStorageUpgrade(WalletTestCase):
     def _sanity_check_upgraded_storage(self, storage, expect_backup=False):
         self.assertFalse(storage.requires_split())
         self.assertFalse(storage.requires_upgrade())
-        Wallet(storage)
+        ParentWallet(storage)
         if expect_backup and os.path.exists(storage.path):
             backup_path = storage._wallet_backup_pattern % (storage.path, 1)
             self.assertTrue(os.path.exists(backup_path),
                 f"backup file '{backup_path}' does not exist")
 
     def _load_storage_from_json_string(self, wallet_json, manual_upgrades=True):
+        # db_path = BaseWalletStore.get_db_path(self.wallet_path)
+        # if os.path.exists(db_path):
+        #     os.remove(db_path)
+
         with open(self.wallet_path, "w") as f:
             f.write(wallet_json)
         storage = WalletStorage(self.wallet_path, manual_upgrades=manual_upgrades)

@@ -41,7 +41,7 @@ from .simple_config import SimpleConfig
 from .storage import WalletStorage
 from .util import json_decode, DaemonThread, to_string, random_integer
 from .version import PACKAGE_VERSION
-from .wallet import Wallet, Abstract_Wallet
+from .wallet import ParentWallet
 
 
 logger = logs.get_logger("daemon")
@@ -184,8 +184,8 @@ class Daemon(DaemonThread):
             while True:
                 for th in threading.enumerate():
                     th_text = str(th)
-                    if "GUI" not in th_text:
-                        continue
+                    # if "GUI" not in th_text:
+                    #     continue
                     print(th)
                     traceback.print_stack(sys._current_frames()[th.ident])
                     print()
@@ -242,7 +242,7 @@ class Daemon(DaemonThread):
 
         return "error: ElectrumSV is running in daemon mode; stop the daemon first."
 
-    def load_wallet(self, path: str, password: Optional[str]) -> Abstract_Wallet:
+    def load_wallet(self, path: str, password: Optional[str]) -> ParentWallet:
         # wizard will be launched if we return
         if path in self.wallets:
             wallet = self.wallets[path]
@@ -260,22 +260,23 @@ class Daemon(DaemonThread):
             return
         if storage.get_action():
             return
-        wallet = Wallet(storage)
-        self.start_wallet(wallet)
-        return wallet
 
-    def get_wallet(self, path: str) -> Abstract_Wallet:
+        parent_wallet = ParentWallet(storage)
+        self.start_wallet(parent_wallet)
+        return parent_wallet
+
+    def get_wallet(self, path: str) -> ParentWallet:
         return self.wallets.get(path)
 
-    def start_wallet(self, wallet: Abstract_Wallet) -> None:
-        self.wallets[wallet.storage.path] = wallet
-        wallet.start(self.network)
+    def start_wallet(self, parent_wallet: ParentWallet) -> None:
+        self.wallets[parent_wallet.get_storage_path()] = parent_wallet
+        parent_wallet.start(self.network)
 
     def stop_wallet_at_path(self, path: str) -> None:
         # Issue #659 wallet may already be stopped.
         if path in self.wallets:
-            wallet = self.wallets.pop(path)
-            wallet.stop()
+            parent_wallet = self.wallets.pop(path)
+            parent_wallet.stop()
 
     def stop_wallets(self):
         for path in list(self.wallets.keys()):
@@ -314,6 +315,7 @@ class Daemon(DaemonThread):
             self.server.handle_request() if self.server else time.sleep(0.1)
         logger.warning("no longer running")
         if self.network:
+            logger.warning("wait for network shutdown")
             self.fx_task.cancel()
             app_state.async_.spawn_and_wait(self.network.shutdown_wait)
         self.on_stop()

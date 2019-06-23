@@ -2,19 +2,23 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QInputDialog, QLineEdit, QVBoxLayout, QLabel
 
 from electrumsv.i18n import _
-from .ledger import LedgerPlugin
-from ..hw_wallet.qt import QtHandlerBase, QtPluginBase
+from electrumsv.keystore import Hardware_KeyStore
+
+from electrumsv.gui.qt.main_window import ElectrumWindow
 from electrumsv.gui.qt.util import WindowModalDialog
+
+from .ledger import LedgerPlugin
+from ..hw_wallet.qt import QtHandlerBase, QtPluginBase, HandlerWindow
 
 
 class Plugin(LedgerPlugin, QtPluginBase):
     icon_paired = "icons8-usb-connected-80.png"
     icon_unpaired = "icons8-usb-disconnected-80.png"
 
-    def create_handler(self, window):
+    def create_handler(self, window: HandlerWindow) -> QtHandlerBase:
         return Ledger_Handler(window)
 
-    def show_settings_dialog(self, window, keystore):
+    def show_settings_dialog(self, window: ElectrumWindow, keystore: Hardware_KeyStore) -> None:
         keystore.handler.setup_dialog()
 
 

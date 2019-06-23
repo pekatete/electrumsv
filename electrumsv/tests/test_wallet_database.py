@@ -33,7 +33,7 @@ class TestBaseWalletStore(unittest.TestCase):
         db_filename = os.path.join(self.temp_dir.name, "test")
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        self.store = wallet_database.BaseWalletStore(None, db_filename, aeskey)
+        self.store = wallet_database.BaseWalletStore(None, db_filename, aeskey, 0)
 
         self.tx_id = os.urandom(32).hex()
 
@@ -74,7 +74,7 @@ class TestGenericKeyValueStore(unittest.TestCase):
         table_name = "test_table"
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.store = _GKVTestableStore(table_name, db_filename, aeskey)
+        cls.store = _GKVTestableStore(table_name, db_filename, aeskey, 0)
 
     @classmethod
     def tearDownClass(cls):
@@ -176,7 +176,7 @@ class TestTransactionInputStore(unittest.TestCase):
         table_name = "test_table"
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.store = wallet_database.TransactionInputStore(db_filename, aeskey)
+        cls.store = wallet_database.TransactionInputStore(db_filename, aeskey, 0)
 
     @classmethod
     def tearDownClass(cls):
@@ -227,7 +227,7 @@ class TestTransactionOutputStore(unittest.TestCase):
         table_name = "test_table"
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.store = wallet_database.TransactionOutputStore(db_filename, aeskey)
+        cls.store = wallet_database.TransactionOutputStore(db_filename, aeskey, 0)
 
     @classmethod
     def tearDownClass(cls):
@@ -275,7 +275,7 @@ class TestTransactionStore(unittest.TestCase):
         db_filename = os.path.join(cls.temp_dir.name, "test")
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.store = wallet_database.TransactionStore(db_filename, aeskey)
+        cls.store = wallet_database.TransactionStore(db_filename, aeskey, 0)
 
         cls.tx_id = os.urandom(32).hex()
 
@@ -555,7 +555,7 @@ class TestTxCache(unittest.TestCase):
         db_filename = os.path.join(cls.temp_dir.name, "test")
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.store = wallet_database.TransactionStore(db_filename, aeskey)
+        cls.store = wallet_database.TransactionStore(db_filename, aeskey, 0)
 
     @classmethod
     def tearDownClass(cls):
@@ -897,8 +897,8 @@ class TestXputCache(unittest.TestCase):
         db_filename_txout = os.path.join(cls.temp_dir.name, "test_txout")
         aeskey_hex = "6fce243e381fe158b5e6497c6deea5db5fbc1c6f5659176b9c794379f97269b4"
         aeskey = bytes.fromhex(aeskey_hex)
-        cls.txin_store = wallet_database.TransactionInputStore(db_filename_txin, aeskey)
-        cls.txout_store = wallet_database.TransactionOutputStore(db_filename_txout, aeskey)
+        cls.txin_store = wallet_database.TransactionInputStore(db_filename_txin, aeskey, 0)
+        cls.txout_store = wallet_database.TransactionOutputStore(db_filename_txout, aeskey, 0)
 
     @classmethod
     def tearDownClass(cls):

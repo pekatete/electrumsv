@@ -355,7 +355,7 @@ class PreferencesDialog(QDialog):
 
     def wallet_widgets(self, wallet):
         label = QLabel(_("The settings below only affect the wallet {}")
-                       .format(wallet.basename()))
+                       .format(wallet.name()))
 
         usechange_cb = QCheckBox(_('Use change addresses'))
         usechange_cb.setChecked(wallet.use_change)

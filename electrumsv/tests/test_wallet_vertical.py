@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -20,8 +21,24 @@ def tearDownModule():
     tear_down_async()
 
 
+class MockParentWallet:
+    def __init__(self) -> None:
+        self._storage_path = tempfile.mktemp()
+
+        self.tx_store_aeskey_bytes = os.urandom(32)
+
+    def get_storage_path(self) -> str:
+        return self._storage_path
+
+    def name(self) -> str:
+        return "mock-parent-wallet"
+
+
 class TestWalletKeystoreAddressIntegrity(unittest.TestCase):
     gap_limit = 1  # make tests run faster
+
+    def setUp(self) -> None:
+        self.parent_wallet = MockParentWallet()
 
     def _check_seeded_keystore_sanity(self, ks):
         self.assertTrue (ks.is_deterministic())
@@ -36,21 +53,23 @@ class TestWalletKeystoreAddressIntegrity(unittest.TestCase):
         self.assertFalse(ks.has_seed())
 
     def _create_standard_wallet(self, ks):
-        store = storage.WalletStorage(tempfile.mktemp())
-        store.put('keystore', ks.dump())
-        store.put('gap_limit', self.gap_limit)
-        w = wallet.Standard_Wallet(store)
+        wallet_data = {}
+        wallet_data['id'] = 0
+        wallet_data['keystore'] = ks.dump()
+        wallet_data['gap_limit'] = self.gap_limit
+        w = wallet.Standard_Wallet(self.parent_wallet, wallet_data)
         w.synchronize()
         return w
 
     def _create_multisig_wallet(self, ks1, ks2):
-        store = storage.WalletStorage(tempfile.mktemp())
         multisig_type = "%dof%d" % (2, 2)
-        store.put('wallet_type', multisig_type)
-        store.put('x%d/' % 1, ks1.dump())
-        store.put('x%d/' % 2, ks2.dump())
-        store.put('gap_limit', self.gap_limit)
-        w = wallet.Multisig_Wallet(store)
+        wallet_data = {}
+        wallet_data['id'] = 0
+        wallet_data['wallet_type'] = multisig_type
+        wallet_data['x%d/' % 1] = ks1.dump()
+        wallet_data['x%d/' % 2] = ks2.dump()
+        wallet_data['gap_limit'] = self.gap_limit
+        w = wallet.Multisig_Wallet(self.parent_wallet, wallet_data)
         w.synchronize()
         return w
 

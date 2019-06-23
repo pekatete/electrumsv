@@ -45,11 +45,12 @@ class InvoiceList(MyTreeWidget):
         self.setColumnWidth(1, 200)
 
     def on_update(self):
-        inv_list = self.parent.invoices.unpaid_invoices()
+        invoices = self.parent._send_wallet.invoices
+        inv_list = invoices.unpaid_invoices()
         self.clear()
         for pr in inv_list:
             key = pr.get_id()
-            status = self.parent.invoices.get_status(key)
+            status = invoices.get_status(key)
             requestor = pr.get_requestor()
             exp = pr.get_expiration_date()
             date_str = format_time(exp, _("Unknown")) if exp else _('Never')
@@ -72,7 +73,7 @@ class InvoiceList(MyTreeWidget):
         if not filename:
             return
         try:
-            self.parent.invoices.import_file(filename)
+            self.parent._send_wallet.invoices.import_file(filename)
         except FileImportFailed as e:
             self.parent.show_message(str(e))
         self.on_update()
@@ -86,8 +87,8 @@ class InvoiceList(MyTreeWidget):
         column = self.currentColumn()
         column_title = self.headerItem().text(column)
         column_data = item.text(column).strip()
-        pr = self.parent.invoices.get(key)
-        status = self.parent.invoices.get_status(key)
+        pr = self.parent._send_wallet.invoices.get(key)
+        status = self.parent._send_wallet.invoices.get_status(key)
         if column_data:
             menu.addAction(_("Copy {}").format(column_title),
                            lambda: self.parent.app.clipboard().setText(column_data))

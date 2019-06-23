@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 )
 
 from electrumsv.i18n import _
+from electrumsv.wallet import ParentWallet
 
 from .virtual_keyboard import VirtualKeyboard
 from .util import (
@@ -119,9 +120,7 @@ class PasswordLayout(object):
 
     titles = [_("Enter Password"), _("Change Password"), _("Enter Passphrase")]
 
-    def __init__(self, wallet, msg, kind, OK_button):
-        self.wallet = wallet
-
+    def __init__(self, parent_wallet, msg, kind, OK_button) -> None:
         self.pw = PasswordLineEdit()
         self.new_pw = PasswordLineEdit()
         self.conf_pw = PasswordLineEdit()
@@ -156,7 +155,7 @@ class PasswordLayout(object):
 
             m1 = _('New Password:') if kind == PW_CHANGE else _('Password:')
             msgs = [m1, _('Confirm Password:')]
-            if wallet and wallet.has_password():
+            if parent_wallet and parent_wallet.has_password():
                 pwlabel = QLabel(_('Current Password:'))
                 pwlabel.setAlignment(Qt.AlignTop)
                 grid.addWidget(pwlabel, 0, 0)
@@ -229,11 +228,10 @@ class PasswordLayout(object):
 
 
 class ChangePasswordDialog(WindowModalDialog):
-
-    def __init__(self, parent, wallet):
+    def __init__(self, parent: QWidget, parent_wallet: ParentWallet) -> None:
         WindowModalDialog.__init__(self, parent)
-        is_encrypted = wallet.storage.is_encrypted()
-        if not wallet.has_password():
+        is_encrypted = parent_wallet.is_encrypted()
+        if not parent_wallet.has_password():
             msg = _('Your wallet is not protected.')
             msg += ' ' + _('Use this dialog to add a password to your wallet.')
         else:
@@ -244,14 +242,14 @@ class ChangePasswordDialog(WindowModalDialog):
                 msg = _('Your wallet is password protected and encrypted.')
             msg += ' ' + _('Use this dialog to change your password.')
         OK_button = OkButton(self)
-        self.playout = PasswordLayout(wallet, msg, PW_CHANGE, OK_button)
+        self.playout = PasswordLayout(parent_wallet, msg, PW_CHANGE, OK_button)
         self.setWindowTitle(self.playout.title())
         vbox = QVBoxLayout(self)
         vbox.setSizeConstraint(QVBoxLayout.SetFixedSize)
         vbox.addLayout(self.playout.layout())
         vbox.addStretch(1)
         vbox.addLayout(Buttons(CancelButton(self), OK_button))
-        self.playout.encrypt_cb.setChecked(is_encrypted or not wallet.has_password())
+        self.playout.encrypt_cb.setChecked(is_encrypted or not parent_wallet.has_password())
 
     def run(self):
         try:

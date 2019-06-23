@@ -38,6 +38,7 @@ class RequestList(MyTreeWidget):
     filter_columns = [0, 1, 2, 3, 4]  # Date, Account, Address, Description, Amount
 
     def __init__(self, parent):
+        self.wallet = parent.parent_wallet.get_default_wallet()
         MyTreeWidget.__init__(self, parent, self.create_menu, [
             _('Date'), _('Address'), '', _('Description'), _('Amount'), _('Status')], 3)
         self.currentItemChanged.connect(self.item_changed)
@@ -65,7 +66,6 @@ class RequestList(MyTreeWidget):
         self.parent.new_request_button.setEnabled(True)
 
     def on_update(self):
-        self.wallet = self.parent.wallet
         # hide receive tab if no receive requests available
         b = len(self.wallet.receive_requests) > 0
         self.setVisible(b)
@@ -120,6 +120,8 @@ class RequestList(MyTreeWidget):
         menu.addAction(_("Copy URI"),
                        lambda: self.parent.view_and_paste(
                            'URI', '', self.parent.get_request_URI(addr)))
-        menu.addAction(_("Save as BIP270 file"), lambda: self.parent.export_payment_request(addr))
-        menu.addAction(_("Delete"), lambda: self.parent.delete_payment_request(addr))
+        menu.addAction(_("Save as BIP270 file"),
+            lambda: self.parent.export_payment_request(addr))
+        menu.addAction(_("Delete"),
+            lambda: self.parent.delete_payment_request(addr))
         menu.exec_(self.viewport().mapToGlobal(position))

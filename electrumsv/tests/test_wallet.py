@@ -17,6 +17,22 @@ from electrumsv.wallet import sweep_preparations, ImportedPrivkeyWallet, UTXO
 from .util import setup_async, tear_down_async
 
 
+class MockParentWallet:
+    def __init__(self) -> None:
+        self._storage_path = tempfile.mktemp()
+
+        self.tx_store_aeskey_bytes = os.urandom(32)
+
+    def get_storage_path(self) -> str:
+        return self._storage_path
+
+    def name(self) -> str:
+        return "mock-parent-wallet"
+
+    def save_storage(self) -> None:
+        pass
+
+
 def setUpModule():
     setup_async()
 
@@ -27,7 +43,7 @@ def tearDownModule():
 
 @pytest.fixture()
 def tmp_storage(tmpdir):
-    return WalletStorage(os.path.join(tmpdir, 'wallet'))
+    return { "id": 0 }
 
 
 @pytest.fixture(params=[SVMainnet, SVTestnet])
@@ -106,7 +122,8 @@ class TestImportedPrivkeyWallet:
         coin = network.COIN
         privkey = PrivateKey.from_random()
         WIF = privkey.to_WIF(coin=coin)
-        wallet = ImportedPrivkeyWallet.from_text(tmp_storage, WIF, None)
+        parent_wallet = MockParentWallet()
+        wallet = ImportedPrivkeyWallet.from_text(parent_wallet, tmp_storage, WIF)
         public_key = privkey.public_key
         pubkey_hex = public_key.to_hex()
         address = public_key.to_address(coin=coin).to_string()

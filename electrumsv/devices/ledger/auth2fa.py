@@ -34,8 +34,8 @@ class LedgerAuthDialog(QDialog):
         self.idxs = self.txdata['keycardData'] if self.txdata['confirmationType'] > 1 else ''
         self.setMinimumWidth(600)
         self.setWindowTitle(_("Ledger Wallet Authentication"))
-        self.cfg = copy.deepcopy(self.handler.win.wallet.get_keystore().cfg)
-        self.dongle = self.handler.win.wallet.get_keystore().get_client().dongle
+        self.cfg = copy.deepcopy(self.handler.get_keystore().cfg)
+        self.dongle = self.handler.get_keystore().get_client().dongle
         self.pin = ''
 
         self.devmode = self.getDevice2FAMode()
@@ -48,8 +48,8 @@ class LedgerAuthDialog(QDialog):
         def on_change_mode(idx):
             self.cfg['mode'] = 0 if self.devmode == 0x11 else idx if idx > 0 else 1
             if self.cfg['mode'] > 0:
-                self.handler.win.wallet.get_keystore().cfg = self.cfg
-                self.handler.win.wallet.save_keystore()
+                self.handler.get_keystore().cfg = self.cfg
+                self.handler.save_keystore()
             self.update_dlg()
         def return_pin():
             self.pin = (self.pintxt.text() if self.txdata['confirmationType'] == 1

@@ -302,8 +302,7 @@ class DeviceMgr:
         info = infos[c]
         # save new label
         keystore.set_label(info.label)
-        if handler.win.wallet:
-            handler.win.wallet.save_keystore()
+        handler.save_keystore()
         return info
 
     def find_hid_devices(self, device_ids):

@@ -479,7 +479,7 @@ class MyTreeWidget(QTreeWidget):
         key = item.data(0, Qt.UserRole)
         text = item.text(column)
         self.parent.wallet.set_label(key, text)
-        self.parent.history_list.update_labels()
+        self.parent.history_view.update_tx_labels()
 
     def update(self):
         # Defer updates if editing

@@ -31,16 +31,17 @@ from PyQt5.QtWidgets import (
     QLineEdit, QGroupBox, QButtonGroup, QRadioButton, QCheckBox, QTextEdit,
     QMessageBox, QWidget, QSlider
 )
-from keepkeylib.qt.pinmatrix import PinMatrixWidget
 
+from keepkeylib.qt.pinmatrix import PinMatrixWidget
 from .keepkey import KeepKeyPlugin, TIM_NEW, TIM_RECOVER, TIM_MNEMONIC
-from ..hw_wallet.qt import QtHandlerBase, QtPluginBase
+from ..hw_wallet.qt import QtHandlerBase, QtPluginBase, HandlerWindow
 
 from electrumsv.app_state import app_state
-from electrumsv.keystore import is_xprv
+from electrumsv.keystore import is_xprv, Hardware_KeyStore
 from electrumsv.i18n import _
 from electrumsv.util import bh2u
 
+from electrumsv.gui.qt.main_window import ElectrumWindow
 from electrumsv.gui.qt.util import (
     WindowModalDialog, WWLabel, Buttons, CancelButton, OkButton, CloseButton,
 )
@@ -76,10 +77,10 @@ class Plugin(KeepKeyPlugin, QtPluginBase):
     icon_paired = "icons8-usb-connected-80.png"
     icon_unpaired = "icons8-usb-disconnected-80.png"
 
-    def create_handler(self, window):
+    def create_handler(self, window: HandlerWindow) -> QtHandlerBase:
         return QtHandler(window, self.device)
 
-    def show_settings_dialog(self, window, keystore):
+    def show_settings_dialog(self, window: ElectrumWindow, keystore: Hardware_KeyStore) -> None:
         device_id = self.choose_device(window, keystore)
         if device_id:
             SettingsDialog(window, self, keystore, device_id).exec_()

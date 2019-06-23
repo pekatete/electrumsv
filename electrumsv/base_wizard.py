@@ -33,8 +33,10 @@ from .app_state import app_state
 from .i18n import _
 from .keystore import bip44_derivation_cointype
 from .logs import logs
+from .storage import WalletStorage
 from .wallet import (
-    ImportedAddressWallet, ImportedPrivkeyWallet, Standard_Wallet, Multisig_Wallet, wallet_types,
+    ParentWallet, ImportedAddressWallet, ImportedPrivkeyWallet, Multisig_Wallet,
+    wallet_types,
 )
 
 
@@ -42,11 +44,11 @@ logger = logs.get_logger('wizard')
 
 
 class BaseWizard(object):
-
-    def __init__(self, storage):
+    def __init__(self, storage: WalletStorage):
         super(BaseWizard, self).__init__()
+
         self.storage = storage
-        self.wallet = None
+        self.parent_wallet: ParentWallet = None
         self.stack = []
         self.plugin = None
         self.keystores = []
@@ -146,12 +148,13 @@ class BaseWizard(object):
 
     def on_import(self, text):
         if keystore.is_address_list(text):
-            self.wallet = ImportedAddressWallet.from_text(self.storage, text)
+            legacy_wallet = ImportedAddressWallet.from_text(self.storage, text)
+            self.parent_wallet = ParentWallet(self.storage, legacy_wallet)
         elif keystore.is_private_key_list(text):
+            legacy_wallet = ImportedPrivkeyWallet.from_text(self.storage, text)
+            self.parent_wallet = ParentWallet(self.storage, legacy_wallet)
+            self.keystores = legacy_wallet.get_keystores()
 
-            self.wallet = ImportedPrivkeyWallet.from_text(self.storage, text,
-                                                          None)
-            self.keystores = self.wallet.get_keystores()
             self.request_password(run_next=self.on_password)
         self.terminate()
 
@@ -362,23 +365,29 @@ class BaseWizard(object):
         for k in self.keystores:
             if k.may_have_password():
                 k.update_password(None, password)
+
         if self.wallet_type == 'standard':
             self.storage.put('seed_type', self.seed_type)
             keys = self.keystores[0].dump()
             self.storage.put('keystore', keys)
-            self.wallet = Standard_Wallet(self.storage)
+
+            self.parent_wallet = ParentWallet(self.storage)
         elif self.wallet_type == 'multisig':
             for i, k in enumerate(self.keystores):
                 self.storage.put('x%d/'%(i+1), k.dump())
             self.storage.write()
-            self.wallet = Multisig_Wallet(self.storage)
+
+            legacy_wallet = Multisig_Wallet(self.storage)
+            self.parent_wallet = ParentWallet(self.storage, legacy_wallet)
         elif self.wallet_type == 'imported':
-            self.wallet.save_keystore()
+            legacy_wallet = self.parent_wallet.get_legacy_wallet()
+            legacy_wallet.save_keystore()
 
     def show_xpub_and_add_cosigners(self, xpub):
         self.show_xpub_dialog(xpub=xpub, run_next=lambda x: self.run('choose_keystore'))
 
-    def create_standard_seed(self): self.create_seed('standard')
+    def create_standard_seed(self):
+        self.create_seed('standard')
 
     def create_seed(self, seed_type):
         from . import mnemonic

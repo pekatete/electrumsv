@@ -27,18 +27,25 @@
 from functools import partial
 from queue import Queue
 import threading
+from typing import Union
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QVBoxLayout, QLabel, QLineEdit, QHBoxLayout, QAction
 
 from electrumsv.app_state import app_state
 from electrumsv.exceptions import UserCancelled
+from electrumsv.keystore import Hardware_KeyStore
 from electrumsv.i18n import _
 
+from electrumsv.gui.qt.installwizard import InstallWizard
+from electrumsv.gui.qt.main_window import ElectrumWindow
 from electrumsv.gui.qt.password_dialog import PasswordDialog, PW_PASSPHRASE, PasswordLineEdit
 from electrumsv.gui.qt.util import (
     WindowModalDialog, Buttons, OkButton, CancelButton, WWLabel, read_QIcon,
 )
+
+
+HandlerWindow = Union[ElectrumWindow, InstallWizard]
 
 
 # The trickiest thing about this handler was getting windows properly
@@ -57,7 +64,7 @@ class QtHandlerBase(QObject):
     yes_no_signal = pyqtSignal(object)
     status_signal = pyqtSignal(object)
 
-    def __init__(self, win, device):
+    def __init__(self, win: HandlerWindow, device):
         super(QtHandlerBase, self).__init__()
         self.clear_signal.connect(self.clear_dialog)
         self.error_signal.connect(self.error_dialog)
@@ -189,13 +196,22 @@ class QtHandlerBase(QObject):
         self.ok = self.win.question(msg)
         self.done.set()
 
+    def get_keystore(self) -> Hardware_KeyStore:
+        # TODO: ACCOUNT: This is not correct, as the hardware keystore must now be explicitly known.
+        return self.win.wallet.get_keystore()
+
+    def save_keystore(self) -> None:
+        # TODO: ACCOUNT: This is not correct, as the hardware keystore must now be explicitly known.
+        if self.win.wallet:
+            self.win.wallet.save_keystore()
+
 
 class QtPluginBase(object):
 
-    def create_handler(self, window):
+    def create_handler(self, window: HandlerWindow) -> QtHandlerBase:
         raise NotImplementedError
 
-    def replace_gui_handler(self, window, keystore):
+    def replace_gui_handler(self, window: ElectrumWindow, keystore: Hardware_KeyStore):
         handler = self.create_handler(window)
         keystore.handler = handler
         keystore.plugin = self
@@ -209,7 +225,7 @@ class QtPluginBase(object):
         handler.icon_unpaired = self.icon_unpaired
         handler.icon_paired = self.icon_paired
 
-    def missing_message(self):
+    def missing_message(self) -> str:
         if hasattr(self, 'libraries_available_message'):
             message = self.libraries_available_message + '\n'
         else:
@@ -229,7 +245,7 @@ class QtPluginBase(object):
             device_id = info.device.id_
         return device_id
 
-    def show_settings_wrapped(self, window, keystore):
+    def show_settings_wrapped(self, window: ElectrumWindow, keystore: Hardware_KeyStore) -> None:
         try:
             self.show_settings_dialog(window, keystore)
         except Exception as e:

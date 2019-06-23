@@ -28,7 +28,7 @@ import webbrowser
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor, QKeySequence
-from PyQt5.QtWidgets import QTreeWidgetItem, QAbstractItemView, QMenu
+from PyQt5.QtWidgets import QTreeWidgetItem, QAbstractItemView, QMenu, QWidget
 from bitcoinx import Address
 
 from electrumsv.i18n import _
@@ -36,7 +36,7 @@ from electrumsv.app_state import app_state
 from electrumsv.keystore import Hardware_KeyStore
 from electrumsv.platform import platform
 from electrumsv.util import profiler
-from electrumsv.wallet import Multisig_Wallet
+from electrumsv.wallet import Multisig_Wallet, Abstract_Wallet
 import electrumsv.web as web
 
 from .util import MyTreeWidget, SortableTreeWidgetItem
@@ -45,8 +45,8 @@ from .util import MyTreeWidget, SortableTreeWidgetItem
 class AddressList(MyTreeWidget):
     filter_columns = [0, 1, 2]  # Address, Label, Balance
 
-    def __init__(self, parent=None):
-        self.wallet = None
+    def __init__(self, parent: QWidget, initial_wallet: Abstract_Wallet) -> None:
+        self.wallet = initial_wallet
         super().__init__(parent, self.create_menu, [], 2)
         self.monospace_font = QFont(platform.monospace_font)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -79,6 +79,7 @@ class AddressList(MyTreeWidget):
                         if it2 and it2.childCount() and it2.isExpanded():
                             expanded_item_names.add(it.text(0) + "/" + it2.text(0))
             return expanded_item_names
+
         def restore_expanded_items(seq_item, used_item, expanded_item_names):
             # restore expanded items.
             if (isinstance(seq_item, QTreeWidgetItem) and not seq_item.isExpanded() and
@@ -88,7 +89,7 @@ class AddressList(MyTreeWidget):
                               else used_item.parent().text(0) + "/" + used_item.text(0))
             if not used_item.isExpanded() and used_item_name in expanded_item_names:
                 used_item.setExpanded(True)
-        self.wallet = self.parent.wallet
+
         had_item_count = self.topLevelItemCount()
         item = self.currentItem()
         current_address = item.data(0, Qt.UserRole) if item else None
@@ -204,7 +205,7 @@ class AddressList(MyTreeWidget):
                 copy_text = item.text(col).strip()
             menu.addAction(_("Copy {}").format(column_title),
                            lambda: self.parent.app.clipboard().setText(copy_text))
-            menu.addAction(_('Details'), lambda: self.parent.show_address(addr))
+            menu.addAction(_('Details'), lambda: self.parent.show_address(self.wallet, addr))
             if col in self.editable_columns:
                 menu.addAction(_("Edit {}").format(column_title), lambda: self.editItem(item, col))
             menu.addAction(_("Request payment"), lambda: self.parent.receive_at(addr))
@@ -212,7 +213,7 @@ class AddressList(MyTreeWidget):
                 menu.addAction(_("Private key"), lambda: self.parent.show_private_key(addr))
             if not is_multisig and not self.wallet.is_watching_only():
                 menu.addAction(_("Sign/verify message"),
-                               lambda: self.parent.sign_verify_message(addr))
+                               lambda: self.parent.sign_verify_message(self.wallet, addr))
                 menu.addAction(_("Encrypt/decrypt message"),
                                lambda: self.encrypt_message(addr))
             if can_delete:
@@ -229,9 +230,9 @@ class AddressList(MyTreeWidget):
 
         freeze = self.parent.set_frozen_state
         if any(self.wallet.is_frozen_address(addr) for addr in addrs):
-            menu.addAction(_("Unfreeze"), partial(freeze, addrs, False))
+            menu.addAction(_("Unfreeze"), partial(freeze, self.wallet, addrs, False))
         if not all(self.wallet.is_frozen_address(addr) for addr in addrs):
-            menu.addAction(_("Freeze"), partial(freeze, addrs, True))
+            menu.addAction(_("Freeze"), partial(freeze, self.wallet, addrs, True))
 
         coins = self.wallet.get_spendable_coins(domain = addrs, config = self.config)
         if coins:
@@ -241,8 +242,8 @@ class AddressList(MyTreeWidget):
         menu.exec_(self.viewport().mapToGlobal(position))
 
     def encrypt_message(self, addr):
-        public_key_str = self.wallet.get_public_key(addr) or ''
-        self.parent.encrypt_message(public_key_str)
+        public_key_str = self.wallet.get_public_key(addr).to_hex() or ''
+        self.parent.encrypt_message(self.wallet, public_key_str)
 
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.Copy) and self.currentColumn() == 0:

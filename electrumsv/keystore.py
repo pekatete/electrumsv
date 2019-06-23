@@ -613,9 +613,9 @@ def from_bip39_seed(seed, passphrase, derivation):
     k.add_xprv_from_seed(bip32_seed, derivation)
     return k
 
-def load_keystore(storage, name):
-    w = storage.get('wallet_type', 'standard')
-    d = storage.get(name, {})
+def load_keystore(wallet_data, name):
+    w = wallet_data.get('wallet_type', 'standard')
+    d = wallet_data.get(name, {})
     t = d.get('type')
     if not t:
         raise ValueError('wallet format requires update')

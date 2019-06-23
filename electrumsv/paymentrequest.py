@@ -26,7 +26,7 @@
 import json
 import os
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Dict
 import urllib.parse
 
 from bitcoinx import TxOutput, Script, Address, classify_output_script
@@ -478,11 +478,11 @@ def make_unsigned_request(req: dict) -> PaymentRequest:
 
 
 class InvoiceStore(object):
-    def __init__(self, storage):
-        self.storage = storage
+    def __init__(self, wallet_data: Dict[str, Any]) -> None:
+        self._wallet_data = wallet_data
         self.invoices = {}
         self.paid = {}
-        d = self.storage.get('invoices', {})
+        d = wallet_data.get('invoices', {})
         self.load(d)
 
     def set_paid(self, pr, txid):
@@ -521,7 +521,7 @@ class InvoiceStore(object):
                 'requestor': pr.requestor,
                 'txid': pr.tx
             }
-        self.storage.put('invoices', l)
+        self.wallet_data['invoices'] = l
 
     def get_status(self, key):
         pr = self.get(key)

@@ -30,24 +30,25 @@ from PyQt5.QtWidgets import QAbstractItemView, QMenu
 from .util import SortableTreeWidgetItem, MyTreeWidget, ColorScheme
 from electrumsv.i18n import _
 from electrumsv.platform import platform
+from electrumsv.wallet import Abstract_Wallet
 
 
 class UTXOList(MyTreeWidget):
     filter_columns = [0, 2]  # Address, Label
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: 'ElectrumWindow', initial_wallet: Abstract_Wallet) -> None:
         MyTreeWidget.__init__(self, parent, self.create_menu, [
             _('Address'), _('Label'), _('Amount'), _('Height'), _('Output point')], 1)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setSortingEnabled(True)
         # force attributes to always be defined, even if None, at construction.
-        self.wallet = self.parent.wallet if hasattr(self.parent, 'wallet') else None
+        # TODO: ACCOUNTS: This should be locally selectable?
+        self.wallet = initial_wallet
         self.monospace_font = QFont(platform.monospace_font)
 
     def on_update(self):
         prev_selection = self.get_selected() # cache previous selection, if any
         self.clear()
-        self.wallet = self.parent.wallet
         for utxo in self.wallet.get_utxos():
             address_text = utxo.address.to_string()
             prevout_str = utxo.key_str()
@@ -142,9 +143,9 @@ class UTXOList(MyTreeWidget):
         # disable editing fields in this tab (labels)
         return False
 
-    def freeze_addresses(self, coins, freeze):
+    def freeze_addresses(self, coins, freeze: bool) -> None:
         addrs = {coin.address for coin in coins}
-        self.parent.set_frozen_state(list(addrs), freeze)
+        self.parent.set_frozen_state(self.wallet, list(addrs), freeze)
 
-    def freeze_coins(self, coins, freeze):
-        self.parent.set_frozen_coin_state(coins, freeze)
+    def freeze_coins(self, coins, freeze: bool) -> None:
+        self.parent.set_frozen_coin_state(self.wallet, coins, freeze)

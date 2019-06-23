@@ -42,7 +42,7 @@ from .keystore import bip44_derivation
 from .logs import logs
 from .networks import Net
 from .util import profiler
-from .wallet_database import DBTxInput, DBTxOutput, TxData, TxFlags, WalletData
+from .wallet_database import DBTxInput, DBTxOutput, TxData, TxFlags, WalletData, MigrationContext
 
 
 logger = logs.get_logger("storage")
@@ -52,7 +52,7 @@ logger = logs.get_logger("storage")
 
 OLD_SEED_VERSION = 4        # electrum versions < 2.0
 NEW_SEED_VERSION = 11       # electrum versions >= 2.0
-FINAL_SEED_VERSION = 18     # electrum >= 2.7 will set this to prevent
+FINAL_SEED_VERSION = 19     # electrum >= 2.7 will set this to prevent
                             # old versions from overwriting new format
 
 
@@ -276,13 +276,14 @@ class WalletStorage:
 
     def requires_upgrade(self) -> None:
         if self.file_exists():
+            seed_version = self.get_seed_version()
             # The version at which we should retain compatibility with Electrum and Electron Cash
             # if they upgrade their wallets using this versioning system correctly.
-            if self.get_seed_version() <= 17:
+            if seed_version <= 17:
                 return True
             # Versions above the compatible seed version, which may conflict with versions those
             # other wallets use.
-            if self.get_seed_version() < FINAL_SEED_VERSION:
+            if seed_version < FINAL_SEED_VERSION:
                 # We flag our upgraded wallets past seed version 17 with 'wallet_author' = 'ESV'.
                 if self.get('wallet_author') == 'ESV':
                     return True
@@ -302,6 +303,7 @@ class WalletStorage:
         self.convert_version_16()
         self.convert_version_17()
         self.convert_version_18()
+        self.convert_version_19()
 
         self.put('seed_version', FINAL_SEED_VERSION)  # just to be sure
         self.write()
@@ -523,6 +525,10 @@ class WalletStorage:
         if not self._is_upgrade_method_needed(17, 17):
             return
 
+        # The scope of this change is to move the bulk of the data stored in the encrypted JSON
+        # wallet file, into encrypted external storage.  At the time of the change, this
+        # storage is based on an Sqlite database.
+
         wallet_type = self.get('wallet_type')
 
         tx_store_aeskey_hex = self.get('tx_store_aeskey')
@@ -531,7 +537,7 @@ class WalletStorage:
             self.put('tx_store_aeskey', tx_store_aeskey_hex)
         tx_store_aeskey = bytes.fromhex(tx_store_aeskey_hex)
 
-        db = WalletData(self.path, tx_store_aeskey)
+        db = WalletData(self.path, tx_store_aeskey, 0)
 
         # Transaction-related data.
         tx_map_in = self.get('transactions', {})
@@ -622,6 +628,54 @@ class WalletStorage:
 
         self.put('wallet_author', 'ESV')
         self.put('seed_version', 18)
+
+    def convert_version_19(self):
+        if not self._is_upgrade_method_needed(18, 18):
+            return
+
+        # The scope of this upgrade is the move towards a wallet no longer being a keystore,
+        # but being a container for one or more child wallets. The goal of this change was to
+        # prepare for a move towards an account-oriented interface.
+
+        # 1. Create the containment for the child wallets.
+        subwallets = []
+
+        wallet_type = self.get('wallet_type')
+        assert wallet_type is not None, "Wallet has no type"
+
+        # Some of these fields are specific to the wallet type, and others are common.
+        possible_wallet_fields = [ "gap_limit", "invoices", "keystore", "labels",
+            "multiple_change", "payment_requests", "stored_height", "use_change" ]
+
+        # 2. Move the local contents of this wallet into the first subwallet.
+        wallet_data = {}
+        wallet_data['wallet_type'] = wallet_type
+        for field_name in possible_wallet_fields:
+            field_value = self.get(field_name)
+            if field_value is not None:
+                wallet_data[field_name] = field_value
+                self.put(field_name, None)
+
+        # Special case for the multiple keystores for the multisig wallets.
+        multsig_mn = multisig_type(wallet_type)
+        if multsig_mn is not None:
+            m, n = multsig_mn
+            for i in range(n):
+                name = 'x%d/'%(i+1)
+                wallet_data[name] = self.get(name)
+                self.put(field_name, None)
+
+        # Linked to the wallet database GroupId column.
+        wallet_data["id"] = 0
+
+        subwallets.append(wallet_data)
+        self.put('subwallets', subwallets)
+
+        # Convert the database to designate child wallets.
+        tx_store_aeskey = bytes.fromhex(self.get('tx_store_aeskey'))
+        db = WalletData(self.path, tx_store_aeskey, 0, MigrationContext(18, 19))
+
+        self.put('seed_version', 19)
 
     def convert_imported(self):
         if not self._is_upgrade_method_needed(0, 13):

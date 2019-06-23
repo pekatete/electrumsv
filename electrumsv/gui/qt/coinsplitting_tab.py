@@ -60,7 +60,7 @@ class CoinSplittingTab(QWidget):
         self.split_button.setEnabled(False)
 
         window = self.window()
-        self.receiving_address = window.wallet.get_unused_address()
+        self.receiving_address = window.parent_wallet.get_default_wallet().get_unused_address()
         self.split_stage = STAGE_PREPARING
         self.new_transaction_cv = threading.Condition()
 
@@ -144,9 +144,9 @@ class CoinSplittingTab(QWidget):
 
     def _ask_send_split_transaction(self):
         window = self.window()
-        wallet = window.wallet
+        wallet = window.parent_wallet.get_default_wallet()
 
-        unused_address = window.wallet.get_unused_address()
+        unused_address = wallet.get_unused_address()
         outputs = [
             TxOutput(all, unused_address.to_script())
         ]
@@ -202,9 +202,10 @@ class CoinSplittingTab(QWidget):
 
     def _on_network_event(self, event, *args):
         window = self.window()
+        selected_wallet = window.parent_wallet.get_default_wallet()
         if event == 'new_transaction':
             tx, wallet = args
-            if wallet == window.wallet: # filter out tx's not for this wallet
+            if wallet is selected_wallet: # filter out tx's not for this wallet
                 our_script = self.receiving_address.to_script_bytes()
                 for tx_output in tx.outputs:
                     if tx_output.script_pubkey == our_script:
@@ -218,7 +219,8 @@ class CoinSplittingTab(QWidget):
 
     def update_balances(self):
         window = self.window()
-        wallet = window.wallet
+        parent_wallet = window.parent_wallet
+        wallet = parent_wallet.get_default_wallet()
 
         self.unfrozen_balance = wallet.get_balance(exclude_frozen_coins=True,
                                                    exclude_frozen_addresses=True)
@@ -255,7 +257,7 @@ class CoinSplittingTab(QWidget):
               "this wallet."),
             "</li>",
         ]
-        if wallet.has_password():
+        if parent_wallet.has_password():
             text.extend([
                 "<li>",
                 _("As this wallet is password protected, you will be prompted to "
@@ -287,8 +289,8 @@ class CoinSplittingTab(QWidget):
     def update_layout(self):
         disabled_text = None
         window = self.window()
-        if hasattr(window, "wallet"):
-            if window.wallet.is_deterministic():
+        if hasattr(window, "parent_wallet"):
+            if window.parent_wallet.get_default_wallet().is_deterministic():
                 grid = QGridLayout()
                 grid.setColumnStretch(0, 1)
                 grid.setColumnStretch(4, 1)

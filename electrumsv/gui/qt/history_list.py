@@ -29,17 +29,19 @@ from typing import Union
 import webbrowser
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QBrush, QColor, QIcon
-from PyQt5.QtWidgets import QMenu
+from PyQt5.QtGui import QBrush, QFont, QIcon, QColor
+from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QMenu, QSplitter, QWidget)
 
 from electrumsv.app_state import app_state
 from electrumsv.bitcoin import COINBASE_MATURITY
 from electrumsv.i18n import _
 from electrumsv.platform import platform
 from electrumsv.util import timestamp_to_datetime, profiler, format_time
-from electrumsv.wallet import Abstract_Wallet
+
+from electrumsv.wallet import Abstract_Wallet, ParentWallet
 import electrumsv.web as web
 
+from .main_window import ElectrumWindow
 from .util import MyTreeWidget, SortableTreeWidgetItem, read_QIcon, MessageBox
 
 
@@ -70,8 +72,10 @@ TX_STATUS = {
 class HistoryList(MyTreeWidget):
     filter_columns = [2, 3, 4]  # Date, Description, Amount
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget, wallet: Abstract_Wallet) -> None:
         MyTreeWidget.__init__(self, parent, self.create_menu, [], 3)
+        self.wallet = wallet
+
         self.refresh_headers()
         self.setColumnHidden(1, True)
         self.setSortingEnabled(True)
@@ -97,7 +101,6 @@ class HistoryList(MyTreeWidget):
 
     @profiler
     def _on_update_history_list(self):
-        self.wallet = self.parent.wallet
         h = self.wallet.get_history(self.get_domain())
         item = self.currentItem()
         current_tx = item.data(0, Qt.UserRole) if item else None
@@ -210,7 +213,8 @@ class HistoryList(MyTreeWidget):
         if is_unconfirmed and tx:
             child_tx = self.wallet.cpfp(tx, 0)
             if child_tx:
-                menu.addAction(_("Child pays for parent"), lambda: self.parent.cpfp(tx, child_tx))
+                menu.addAction(_("Child pays for parent"),
+                    lambda: self.parent.cpfp(self.wallet, tx, child_tx))
         if pr_key:
             menu.addAction(read_QIcon("seal"), _("View invoice"),
                            lambda: self.parent.show_invoice(pr_key))
@@ -250,4 +254,46 @@ def get_tx_tooltip(status: TxStatus, conf: int) -> str:
 
 def get_tx_icon(status: TxStatus) -> QIcon:
     return read_QIcon(TX_ICONS[status])
+
+
+class HistoryView(QSplitter):
+    def __init__(self, parent: ElectrumWindow, parent_wallet: ParentWallet) -> None:
+        super().__init__(parent)
+
+        self._main_window = parent
+        self._parent_wallet = parent_wallet
+
+        # Left-hand side a list of wallets.
+        # Right-hand side a history view showing the current wallet.
+        self._selection_list = QListWidget()
+        self._history_list = HistoryList(parent, parent_wallet.get_default_wallet())
+
+        self.addWidget(self._selection_list)
+        self.addWidget(self._history_list)
+
+        self.setStretchFactor(1, 2)
+
+        self._update_wallet_list()
+
+    def _update_wallet_list(self) -> None:
+        for child_wallet in self._parent_wallet.get_child_wallets():
+            item = QListWidgetItem()
+            item.setText(child_wallet.display_name())
+            self._selection_list.addItem(item)
+
+    @property
+    def searchable_list(self) -> HistoryList:
+        return self._history_list
+
+    def update_tx_list(self) -> None:
+        self._history_list.update()
+
+    def update_tx_headers(self) -> None:
+        self._history_list.update_headers()
+
+    def update_tx_labels(self) -> None:
+        self._history_list.update_labels()
+
+    def update_tx_item(self, tx_hash: str, height, conf, timestamp) -> None:
+        self._history_list.update_item(tx_hash, height, conf, timestamp)
 

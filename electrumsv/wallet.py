@@ -37,7 +37,7 @@ import os
 import random
 import threading
 import time
-from typing import Optional, Union, Tuple, List, Any, Iterable
+from typing import Optional, Union, Tuple, List, Any, Iterable, Dict
 
 from aiorpcx import run_in_thread
 from bitcoinx import (
@@ -54,12 +54,13 @@ from .contacts import Contacts
 from .crypto import sha256d
 from .exceptions import NotEnoughFunds, ExcessiveFee, UserCancelled, InvalidPassword
 from .i18n import _
-from .keystore import load_keystore, Hardware_KeyStore, Imported_KeyStore, BIP32_KeyStore
+from .keystore import (load_keystore, Hardware_KeyStore, Imported_KeyStore, BIP32_KeyStore,
+    KeyStore)
 from .logs import logs
 from .networks import Net
 from .paymentrequest import InvoiceStore
 from .paymentrequest import PR_PAID, PR_UNPAID, PR_UNKNOWN, PR_EXPIRED
-from .storage import multisig_type
+from .storage import multisig_type, WalletStorage
 from .transaction import (
     Transaction, classify_tx_output, tx_output_to_display_text, XPublicKey, NO_SIGNATURE,
     XTxInput
@@ -199,10 +200,15 @@ class Abstract_Wallet:
     max_change_outputs = 3
     _filter_observed_addresses = False
 
-    def __init__(self, storage):
-        self.storage = storage
-        self.logger = logs.get_logger("wallet[{}]".format(self.basename()))
-        self.electrum_version = PACKAGE_VERSION
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]):
+        self._parent_wallet = parent_wallet
+        self._wallet_data = wallet_data
+        self._id = wallet_data["id"]
+
+        self.db = WalletData(parent_wallet.get_storage_path(), parent_wallet.tx_store_aeskey_bytes,
+            self._id)
+
+        self.logger = logs.get_logger("wallet[{}]".format(self.name()))
         self.network = None
 
         # For synchronization.
@@ -221,15 +227,15 @@ class Abstract_Wallet:
 
         self.gap_limit_for_change = 6  # constant
         # saved fields
-        self.use_change            = storage.get('use_change', True)
-        self.multiple_change       = storage.get('multiple_change', False)
-        self.labels                = storage.get('labels', {})
+        self.use_change = wallet_data.get('use_change', True)
+        self.multiple_change = wallet_data.get('multiple_change', False)
+        self.labels = wallet_data.get('labels', {})
 
         self.load_keystore()
         self.load_external_data()
 
         # load requests
-        requests = self.storage.get('payment_requests', {})
+        requests = wallet_data.get('payment_requests', {})
         for key, req in requests.items():
             req['address'] = Address.from_string(key)
         self.receive_requests = {req['address']: req
@@ -240,15 +246,20 @@ class Abstract_Wallet:
         self.transaction_lock = threading.RLock()
 
         # save wallet type the first time
-        if self.storage.get('wallet_type') is None:
-            self.storage.put('wallet_type', self.wallet_type)
+        if wallet_data.get('wallet_type') is None:
+            wallet_data['wallet_type'] = self.wallet_type
 
         # invoices and contacts
-        self.invoices = InvoiceStore(self.storage)
-        self.contacts = Contacts(self.storage)
+        self.invoices = InvoiceStore(wallet_data)
 
-    def save_storage(self):
-        self.storage.write()
+    def is_wrapped_legacy_wallet(self):
+        return True
+
+    def get(self, key, default=None):
+        return self._wallet_data.get(key, default)
+
+    def put(self, key, value):
+        self._wallet_data[key] = value
 
     def missing_transactions(self):
         '''Returns a set of tx_hashes.'''
@@ -304,20 +315,19 @@ class Abstract_Wallet:
         return {addr.to_string(): value for addr, value in d.items()}
 
     def __str__(self):
-        return self.basename()
+        return self.name()
 
     def get_master_public_key(self):
         return None
 
-    def create_gui_handlers(self, window):
+    def create_gui_handlers(self, window: 'ElectrumWindow'):
         for keystore in self.get_keystores():
             if isinstance(keystore, Hardware_KeyStore):
                 keystore.plugin.replace_gui_handler(window, keystore)
 
     @profiler
     def load_external_data(self):
-        tx_store_aeskey_bytes = bytes.fromhex(self.storage.get('tx_store_aeskey'))
-        self.db = WalletData(self.storage.path, tx_store_aeskey_bytes)
+        # TODO: ACCOUNTS: self.db from parent wallet
 
         self.pending_txs = self.db.tx.get_transactions(TxFlags.StateSigned, TxFlags.STATE_MASK)
 
@@ -409,8 +419,15 @@ class Abstract_Wallet:
         flags = self.db.tx.get_flags(tx_id)
         return flags is not None and (flags & (TxFlags.StateSettled | TxFlags.StateCleared)) != 0
 
-    def basename(self) -> str:
-        return os.path.basename(self.storage.path)
+    def display_name(self) -> str:
+        # TODO: ACCOUNTS: Allow user to change this.
+        if self._id == 0:
+            return f"main wallet ({self.wallet_type})"
+        return f"wallet {self._id} ({self.wallet_type})"
+
+    def name(self) -> str:
+        parent_name = self._parent_wallet.name()
+        return f"{parent_name}/{self._id}"
 
     def save_addresses(self) -> dict:
         return {
@@ -449,7 +466,7 @@ class Abstract_Wallet:
 
         if changed:
             app_state.app.on_label_change(self, name, text)
-            self.storage.put('labels', self.labels)
+            self._wallet_data['labels'] = self.labels
 
         return changed
 
@@ -519,7 +536,7 @@ class Abstract_Wallet:
     def get_local_height(self):
         """ return last known height if we are offline """
         return (self.network.get_local_height() if self.network else
-                self.storage.get('stored_height', 0))
+                self._wallet_data.get('stored_height', 0))
 
     def get_tx_height(self, tx_hash):
         """ return the height and timestamp of a verified transaction. """
@@ -545,8 +562,8 @@ class Abstract_Wallet:
             else:
                 return (1e9+1, 0)
 
-    def is_found(self):
-        return any(value for value in self._history.values())
+    def has_usage(self):
+        return len(self._history)
 
     def get_num_tx(self, address):
         """ return number of transactions where address is involved """
@@ -1116,7 +1133,7 @@ class Abstract_Wallet:
         assert isinstance(addr, Address)
         return addr in self._frozen_addresses
 
-    def set_frozen_state(self, addrs, freeze) -> bool:
+    def set_frozen_state(self, addrs: Iterable[Address], freeze: bool) -> bool:
         '''Set frozen state of the addresses to FREEZE, True or False.  Note that address-level
         freezing is set/unset independent of coin-level freezing, however both must be
         satisfied for a coin to be defined as spendable.
@@ -1148,10 +1165,9 @@ class Abstract_Wallet:
         self.logger.debug(f'stopping wallet {self}')
         if self.network:
             self.network.remove_wallet(self)
-            self.storage.put('stored_height', self.get_local_height())
+            self._wallet_data['stored_height'] = self.get_local_height()
             self.network = None
         self.save_external_data()
-        self.storage.write()
 
     def can_export(self) -> bool:
         return not self.is_watching_only() and hasattr(self.keystore, 'get_private_key')
@@ -1385,8 +1401,8 @@ class Abstract_Wallet:
             address_.to_string(): _delete_transient_state(value.copy())
             for address_, value in self.receive_requests.items()
         }
-        self.storage.put('payment_requests', requests)
-        self.storage.write()
+        self._wallet_data['payment_requests'] = requests
+        self._parent_wallet.save_storage()
 
     def add_payment_request(self, req, config, set_address_label=True):
         address_ = req['address']
@@ -1495,12 +1511,6 @@ class Abstract_Wallet:
             self._used_addresses = []
         return result
 
-    def has_password(self):
-        return self.storage.get('use_encryption', False)
-
-    def check_password(self, password):
-        self.keystore.check_password(password)
-
     def sign_message(self, address, message, password):
         index = self.get_address_index(address)
         return self.keystore.sign_message(index, message, password)
@@ -1527,21 +1537,16 @@ class Simple_Wallet(Abstract_Wallet):
         return self.keystore.can_change_password()
 
     def update_password(self, old_pw, new_pw, encrypt=False):
-        if old_pw is None and self.has_password():
-            raise InvalidPassword()
         # Watching only wallets are the non-keystore case.
         if self.keystore is not None:
             self.keystore.update_password(old_pw, new_pw)
             self.save_keystore()
-        self.storage.set_password(new_pw, encrypt)
-        self.storage.write()
 
     def save_keystore(self):
-        self.storage.put('keystore', self.keystore.dump())
+        self._wallet_data['keystore'] = self.keystore.dump()
 
 
 class ImportedWalletBase(Simple_Wallet):
-
     txin_type = 'p2pkh'
 
     def get_txin_type(self, address):
@@ -1604,13 +1609,14 @@ class ImportedAddressWallet(ImportedWalletBase):
 
     wallet_type = 'imported_addr'
 
-    def __init__(self, storage):
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]) -> None:
         self._sorted = None
-        super().__init__(storage)
+        super().__init__(parent_wallet, wallet_data)
 
     @classmethod
-    def from_text(cls, storage, text):
-        wallet = cls(storage)
+    def from_text(cls, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any],
+            text: str) -> Abstract_Wallet:
+        wallet = cls(parent_wallet, wallet_data)
         for address in text.split():
             wallet.import_address(Address.from_string(address))
         # Avoid adding addresses twice in network.py
@@ -1674,15 +1680,16 @@ class ImportedPrivkeyWallet(ImportedWalletBase):
 
     wallet_type = 'imported_privkey'
 
-    def __init__(self, storage):
-        Abstract_Wallet.__init__(self, storage)
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]):
+        Abstract_Wallet.__init__(self, parent_wallet, wallet_data)
 
     @classmethod
-    def from_text(cls, storage, text, password=None):
-        wallet = cls(storage)
-        storage.put('use_encryption', bool(password))
+    def from_text(cls, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any],
+            text: str) -> Abstract_Wallet:
+        wallet = cls(parent_wallet, wallet_data)
         for privkey in text.split():
-            wallet.import_private_key(privkey, password)
+            # Passwords are set on the parent wallet.
+            wallet.import_private_key(privkey, None)
         # Avoid adding addresses twice in network.py
         wallet._new_addresses.clear()
         return wallet
@@ -1697,13 +1704,13 @@ class ImportedPrivkeyWallet(ImportedWalletBase):
         return True
 
     def load_keystore(self):
-        if self.storage.get('keystore'):
-            self.keystore = load_keystore(self.storage, 'keystore')
+        if self._wallet_data.get('keystore'):
+            self.keystore = load_keystore(self._wallet_data, 'keystore')
         else:
             self.keystore = Imported_KeyStore({})
 
     def save_keystore(self):
-        self.storage.put('keystore', self.keystore.dump())
+        self._wallet_data['keystore'] = self.keystore.dump()
 
     def load_addresses(self, data: Any) -> None:
         pass
@@ -1733,7 +1740,7 @@ class ImportedPrivkeyWallet(ImportedWalletBase):
     def import_private_key(self, sec, pw):
         pubkey = self.keystore.import_privkey(sec, pw)
         self.save_keystore()
-        self.storage.write()
+        self._parent_wallet.save_storage()
         address_str = pubkey.to_address(coin=Net.COIN).to_string()
         self._add_new_addresses([Address.from_string(address_str)])
         return address_str
@@ -1757,11 +1764,11 @@ class ImportedPrivkeyWallet(ImportedWalletBase):
 
 class Deterministic_Wallet(Abstract_Wallet):
 
-    def __init__(self, storage):
-        Abstract_Wallet.__init__(self, storage)
-        self.gap_limit = storage.get('gap_limit', 20)
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]) -> None:
+        Abstract_Wallet.__init__(self, parent_wallet, wallet_data)
+        self.gap_limit = wallet_data.get('gap_limit', 20)
 
-    def has_seed(self):
+    def has_seed(self) -> bool:
         return self.keystore.has_seed()
 
     def get_receiving_addresses(self):
@@ -1770,14 +1777,14 @@ class Deterministic_Wallet(Abstract_Wallet):
     def get_change_addresses(self):
         return self.change_addresses
 
-    def get_seed(self, password):
+    def get_seed(self, password: Optional[str]) -> str:
         return self.keystore.get_seed(password)
 
-    def change_gap_limit(self, value):
+    def change_gap_limit(self, value: int) -> bool:
         '''This method is not called in the code, it is kept for console use'''
         if value >= self.gap_limit:
             self.gap_limit = value
-            self.storage.put('gap_limit', self.gap_limit)
+            self._wallet_data['gap_limit'] = self.gap_limit
             return True
         elif value >= self.min_acceptable_gap():
             addresses = self.get_receiving_addresses()
@@ -1785,7 +1792,7 @@ class Deterministic_Wallet(Abstract_Wallet):
             n = len(addresses) - k + value
             self.receiving_addresses = self.receiving_addresses[0:n]
             self.gap_limit = value
-            self.storage.put('gap_limit', self.gap_limit)
+            self._wallet_data['gap_limit'] = self.gap_limit
             self.save_addresses()
             return True
         else:
@@ -1868,8 +1875,8 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
 
     """ Deterministic Wallet with a single pubkey per address """
 
-    def __init__(self, storage):
-        Deterministic_Wallet.__init__(self, storage)
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]) -> None:
+        Deterministic_Wallet.__init__(self, parent_wallet, wallet_data)
 
     def get_public_key(self, address):
         sequence = self.get_address_index(address)
@@ -1877,7 +1884,7 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
         return pubkey
 
     def load_keystore(self):
-        self.keystore = load_keystore(self.storage, 'keystore')
+        self.keystore = load_keystore(self._wallet_data, 'keystore')
         self.txin_type = 'p2pkh'
 
     def get_pubkey(self, c, i):
@@ -1911,10 +1918,10 @@ class Multisig_Wallet(Deterministic_Wallet):
     # generic m of n
     gap_limit = 20
 
-    def __init__(self, storage):
-        self.wallet_type = storage.get('wallet_type')
+    def __init__(self, parent_wallet: 'ParentWallet', wallet_data: Dict[str, Any]) -> None:
+        self.wallet_type = wallet_data.get('wallet_type')
         self.m, self.n = multisig_type(self.wallet_type)
-        Deterministic_Wallet.__init__(self, storage)
+        Deterministic_Wallet.__init__(self, parent_wallet, wallet_data)
 
     def get_pubkeys(self, c, i):
         return self.derive_pubkeys(c, i)
@@ -1934,13 +1941,13 @@ class Multisig_Wallet(Deterministic_Wallet):
         self.keystores = {}
         for i in range(self.n):
             name = 'x%d/'%(i+1)
-            self.keystores[name] = load_keystore(self.storage, name)
+            self.keystores[name] = load_keystore(self._wallet_data, name)
         self.keystore = self.keystores['x1/']
         self.txin_type = 'p2sh'
 
     def save_keystore(self):
         for name, k in self.keystores.items():
-            self.storage.put(name, k.dump())
+            self._wallet_data[name] = k.dump()
 
     def get_keystore(self):
         return self.keystores.get('x1/')
@@ -1949,14 +1956,10 @@ class Multisig_Wallet(Deterministic_Wallet):
         return [self.keystores[i] for i in sorted(self.keystores.keys())]
 
     def update_password(self, old_pw, new_pw, encrypt=False):
-        if old_pw is None and self.has_password():
-            raise InvalidPassword()
         for name, keystore in self.keystores.items():
             if keystore.can_change_password():
                 keystore.update_password(old_pw, new_pw)
-                self.storage.put(name, keystore.dump())
-        self.storage.set_password(new_pw, encrypt)
-        self.storage.write()
+                self._wallet_data[name] = keystore.dump()
 
     def has_seed(self):
         return self.keystore.has_seed()
@@ -1989,34 +1992,136 @@ class Multisig_Wallet(Deterministic_Wallet):
             txin.threshold = self.m
 
 
-wallet_types = ['standard', 'multisig', 'imported']
+class LegacyWalletExpectedError(Exception):
+    pass
 
-wallet_constructors = {
-    'standard': Standard_Wallet,
-    'old': Standard_Wallet,
-    'xpub': Standard_Wallet,
-    'imported_privkey': ImportedPrivkeyWallet,
-    'imported_addr': ImportedAddressWallet,
-}
 
-def register_constructor(wallet_type, constructor):
-    wallet_constructors[wallet_type] = constructor
+class ParentWallet(object):
+    def __init__(self, storage: WalletStorage,
+            wallet: Optional[Abstract_Wallet]=None) -> None:
+        self._storage = storage
+        self._logger = logs.get_logger("wallet[{}]".format(self.name()))
 
-# former WalletFactory
-class Wallet(object):
-    """The main wallet "entry point".
-    This class is actually a factory that will return a wallet of the correct
-    type when passed a WalletStorage instance."""
+        self.tx_store_aeskey_bytes = bytes.fromhex(self._storage.get('tx_store_aeskey'))
 
-    def __new__(self, storage):
-        wallet_type = storage.get('wallet_type')
-        WalletClass = Wallet.wallet_class(wallet_type)
-        return WalletClass(storage)
+        if wallet is None:
+            self.load_state()
+        else:
+            self._child_wallets = [ wallet ]
 
-    @staticmethod
-    def wallet_class(wallet_type):
+        self.contacts = Contacts(self._storage)
+
+    def load_state(self) -> None:
+        subwallet_datas = self._storage.get("subwallets", [])
+        self._child_wallets = [ None ] * len(subwallet_datas)
+        # This data is modified by reference at the moment.
+        for subwallet_data in subwallet_datas:
+            subwallet_id = subwallet_data["id"]
+            self._child_wallets[subwallet_id] = self._create_child_wallet(subwallet_data)
+
+    def get_storage(self) -> WalletStorage:
+        return self._storage
+
+    def save_storage(self) -> bool:
+        # Subwallet data is modified by reference at the moment, so no need to update it manually.
+        self._storage.write()
+
+    def name(self) -> str:
+        return os.path.basename(self._storage.path)
+
+    def get_storage_path(self) -> str:
+        return self._storage.path
+
+    def is_encrypted(self) -> bool:
+        return self._storage.is_encrypted()
+
+    def has_password(self) -> bool:
+        return self._storage.get('use_encryption', False)
+
+    def check_password(self, password) -> None:
+        address_manager = self.get_default_wallet()
+        address_manager.keystore.check_password(password)
+
+    def update_password(self, old_pw, new_pw, encrypt=False):
+        if old_pw is None and self.has_password():
+            raise InvalidPassword()
+        for wallet in self.get_child_wallets():
+            wallet.update_password(old_pw, new_pw)
+        self._storage.set_password(new_pw, encrypt)
+        self._storage.write()
+
+    def is_wrapped_legacy_wallet(self) -> bool:
+        child_wallet = self._child_wallets[0]
+        if isinstance(child_wallet, Standard_Wallet):
+            if not child_wallet.is_hardware_wallet():
+                return False
+        return True
+
+    def contains_wallet(self, wallet: Abstract_Wallet) -> bool:
+        return wallet in self.get_child_wallets()
+
+    def get_wallet_for_account(self, account_id: int) -> Abstract_Wallet:
+        return self._child_wallets[account_id]
+
+    def get_wallet_for_address(self, address: Address) -> Abstract_Wallet:
+        for wallet in self.get_child_wallets():
+            if address in wallet.get_addresses():
+                return wallet
+
+    def get_child_wallets(self) -> Iterable[Abstract_Wallet]:
+        return self._child_wallets[:]
+
+    def get_default_wallet(self) -> Abstract_Wallet:
+        return self._child_wallets[0]
+
+    def get_default_keystore(self) -> KeyStore:
+        return self._child_wallets[0].keystore
+
+    def get_legacy_wallet(self) -> Abstract_Wallet:
+        if self.is_wrapped_legacy_wallet():
+            return self.get_default_wallet()
+        raise LegacyWalletExpectedError()
+
+    def _create_child_wallet(self, wallet_data: Dict[str, Any]) -> Abstract_Wallet:
+        wallet_constructors = {
+            'standard': Standard_Wallet,
+            'old': Standard_Wallet,
+            'xpub': Standard_Wallet,
+            'imported_privkey': ImportedPrivkeyWallet,
+            'imported_addr': ImportedAddressWallet,
+        }
+
+        wallet_type = wallet_data.get('wallet_type')
         if multisig_type(wallet_type):
-            return Multisig_Wallet
+            return Multisig_Wallet(self, wallet_data)
         if wallet_type in wallet_constructors:
-            return wallet_constructors[wallet_type]
+            return wallet_constructors[wallet_type](self, wallet_data)
+
         raise RuntimeError("Unknown wallet type: " + str(wallet_type))
+
+    def has_usage(self) -> bool:
+        "If there is any known usage of any child wallet."
+        return any(w.has_usage() for w in self.get_child_wallets())
+
+    def is_synchronized(self) -> bool:
+        "If all the child wallets are synchronized"
+        return all(w.is_synchronized() for w in self.get_child_wallets())
+
+    def start(self, network: 'Network') -> None:
+        for wallet in self.get_child_wallets():
+            wallet.start(network)
+
+    def stop(self) -> None:
+        for wallet in self.get_child_wallets():
+            wallet.stop()
+        self._storage.write()
+
+    def create_gui_handlers(self, window: 'ElectrumWindow') -> None:
+        for wallet in self.get_child_wallets():
+            for keystore in wallet.get_keystores():
+                if isinstance(keystore, Hardware_KeyStore):
+                    keystore.plugin.replace_gui_handler(window, keystore)
+
+
+# TODO: ACCOUNTS: Reconcile usage of this with parent wallet usage.
+wallet_types = ['standard', 'multisig', 'imported']
