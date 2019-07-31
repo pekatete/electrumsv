@@ -1,5 +1,6 @@
 parameters:
   onlyPullRequests: false
+
 steps:
 - script: |
     sudo apt-get update
